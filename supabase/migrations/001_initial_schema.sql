@@ -56,14 +56,9 @@ CREATE TABLE member (
     role            VARCHAR(15) DEFAULT 'member'
                     CHECK (role IN ('member','treasurer','corrector','imam','admin','super_admin')),
 
-    is_eligible_quran BOOLEAN GENERATED ALWAYS AS (
-        membership_date <= CURRENT_DATE - INTERVAL '6 months'
-    ) STORED,
+    is_eligible_quran BOOLEAN DEFAULT FALSE,
 
-    anciennete_mois INT GENERATED ALWAYS AS (
-        EXTRACT(YEAR FROM age(CURRENT_DATE, membership_date)) * 12 +
-        EXTRACT(MONTH FROM age(CURRENT_DATE, membership_date))
-    ) STORED,
+    anciennete_mois INT DEFAULT 0,
 
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     updated_at  TIMESTAMPTZ DEFAULT NOW(),
@@ -455,6 +450,22 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER set_member_updated
     BEFORE UPDATE ON member
     FOR EACH ROW EXECUTE FUNCTION update_timestamp();
+
+
+-- Trigger : calculer is_eligible_quran et anciennete_mois
+CREATE OR REPLACE FUNCTION compute_member_fields()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.anciennete_mois := EXTRACT(YEAR FROM age(CURRENT_DATE, NEW.membership_date)) * 12 +
+                           EXTRACT(MONTH FROM age(CURRENT_DATE, NEW.membership_date));
+    NEW.is_eligible_quran := NEW.membership_date <= CURRENT_DATE - INTERVAL '6 months';
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER compute_member_fields_trigger
+    BEFORE INSERT OR UPDATE ON member
+    FOR EACH ROW EXECUTE FUNCTION compute_member_fields();
 
 -- ============================================================
 -- ROW LEVEL SECURITY (RLS)
