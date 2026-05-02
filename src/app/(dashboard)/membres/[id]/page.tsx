@@ -1,5 +1,5 @@
 import { createServerSupabase } from '@/lib/supabase/server'
-import { STATUS_LABELS, ROLE_LABELS, MONTHS_FR } from '@/lib/types'
+import { STATUS_LABELS, ROLE_LABELS, MONTHS_FR, type MemberStatus, type MemberRole } from '@/lib/types'
 import { formatDate, formatCFA, getAncienneteLabel, formatPhone } from '@/lib/utils'
 import Link from 'next/link'
 
@@ -57,8 +57,8 @@ export default async function MemberDetailPage({
             </h1>
             <p className="text-sm text-gray-500">{member.profession || '—'}</p>
             <div className="flex gap-2 mt-2 flex-wrap">
-              <span className="badge badge-green">{STATUS_LABELS[member.status]}</span>
-              <span className="badge badge-blue">{ROLE_LABELS[member.role]}</span>
+              <span className="badge badge-green">{STATUS_LABELS[member.status as MemberStatus]}</span>
+              <span className="badge badge-blue">{ROLE_LABELS[member.role as MemberRole]}</span>
               {member.is_eligible_quran && <span className="badge badge-green">Coran ✓</span>}
             </div>
           </div>

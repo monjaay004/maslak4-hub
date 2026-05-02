@@ -1,6 +1,6 @@
 import { createServerSupabase } from '@/lib/supabase/server'
 import { formatCFA, getAncienneteLabel } from '@/lib/utils'
-import { STATUS_LABELS } from '@/lib/types'
+import { STATUS_LABELS, type MemberStatus } from '@/lib/types'
 import Link from 'next/link'
 
 export default async function DashboardPage() {
@@ -72,7 +72,7 @@ export default async function DashboardPage() {
           Salam, {me.first_name}
         </h1>
         <p className="text-sm text-gray-500 mt-0.5">
-          {STATUS_LABELS[me.status]} · {getAncienneteLabel(me.anciennete_mois)}
+          {STATUS_LABELS[me.status as MemberStatus]} · {getAncienneteLabel(me.anciennete_mois)}
         </p>
       </div>
 
