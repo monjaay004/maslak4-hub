@@ -179,9 +179,12 @@ function AdminMembres({ tenantId }: { tenantId: string }) {
     setForm({ gender: 'M', status: 'AC', role: 'member', membership_date: new Date().toISOString().split('T')[0] })
   }
 
+  const [importing, setImporting] = useState(false)
+  const [importPreview, setImportPreview] = useState<any[]>([])
+
   async function exportCSV() {
-    const rows = [['Prénom','Nom','Statut','Téléphone','WhatsApp','Email','Profession','Adresse','Rôle','Adhésion'].join(';')]
-    members.forEach(m => rows.push([m.first_name,m.last_name,m.status,m.phone||'',m.whatsapp||'',m.email||'',m.profession||'',m.address||'',m.role,m.membership_date].join(';')))
+    const rows = [['Prénom','Nom','Genre','Statut','Téléphone','WhatsApp','Email','Profession','Adresse','Rôle','Adhésion'].join(';')]
+    members.forEach(m => rows.push([m.first_name,m.last_name,m.gender||'',m.status,m.phone||'',m.whatsapp||'',m.email||'',m.profession||'',m.address||'',m.role,m.membership_date].join(';')))
     const blob = new Blob(['\ufeff'+rows.join('\n')], { type: 'text/csv;charset=utf-8' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
@@ -190,15 +193,137 @@ function AdminMembres({ tenantId }: { tenantId: string }) {
     toast.success('Export CSV téléchargé')
   }
 
+  async function handleFileImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImporting(true)
+
+    try {
+      const text = await file.text()
+      const lines = text.split(/\r?\n/).filter(l => l.trim())
+      const header = lines[0].toLowerCase()
+
+      // Détecter le séparateur
+      const sep = header.includes(';') ? ';' : header.includes('\t') ? '\t' : ','
+
+      const headers = lines[0].split(sep).map(h => h.trim().toLowerCase().replace(/['"]/g, ''))
+      const rows: any[] = []
+
+      // Mapper les colonnes intelligemment
+      const colMap: Record<string, number> = {}
+      headers.forEach((h, i) => {
+        if (h.includes('prénom') || h.includes('prenom') || h.includes('first')) colMap.first_name = i
+        else if (h.includes('nom') || h.includes('last') || h.includes('name')) colMap.last_name = i
+        else if (h.includes('genre') || h.includes('sexe') || h.includes('gender')) colMap.gender = i
+        else if (h.includes('statut') || h.includes('status')) colMap.status = i
+        else if (h.includes('whatsapp') || h.includes('wha')) colMap.whatsapp = i
+        else if (h.includes('tel') || h.includes('phone') || h.includes('téléphone')) colMap.phone = i
+        else if (h.includes('email') || h.includes('mail')) colMap.email = i
+        else if (h.includes('profession') || h.includes('métier') || h.includes('metier')) colMap.profession = i
+        else if (h.includes('adresse') || h.includes('address')) colMap.address = i
+        else if (h.includes('role') || h.includes('rôle')) colMap.role = i
+        else if (h.includes('adhésion') || h.includes('adhesion') || h.includes('date')) colMap.membership_date = i
+      })
+
+      // Si pas de colonnes détectées, essayer format simple (Prénom;Nom;Téléphone)
+      if (!colMap.first_name && !colMap.last_name) {
+        if (headers.length >= 2) {
+          colMap.first_name = 0
+          colMap.last_name = 1
+          if (headers.length >= 3) colMap.phone = 2
+          if (headers.length >= 4) colMap.profession = 3
+          if (headers.length >= 5) colMap.status = 4
+        }
+      }
+
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(sep).map(c => c.trim().replace(/^["']|["']$/g, ''))
+        const firstName = cols[colMap.first_name] || ''
+        const lastName = cols[colMap.last_name] || ''
+        if (!firstName && !lastName) continue
+
+        rows.push({
+          first_name: firstName,
+          last_name: lastName,
+          gender: cols[colMap.gender] || 'M',
+          status: cols[colMap.status] || 'AC',
+          phone: cols[colMap.phone] || '',
+          whatsapp: cols[colMap.whatsapp] || cols[colMap.phone] || '',
+          email: cols[colMap.email] || '',
+          profession: cols[colMap.profession] || '',
+          address: cols[colMap.address] || '',
+          role: cols[colMap.role] || 'member',
+          membership_date: cols[colMap.membership_date] || new Date().toISOString().split('T')[0],
+        })
+      }
+
+      setImportPreview(rows)
+      toast.success(`${rows.length} membres détectés dans le fichier`)
+    } catch (err: any) {
+      toast.error('Erreur de lecture du fichier : ' + err.message)
+    }
+    setImporting(false)
+    e.target.value = ''
+  }
+
+  async function confirmImport() {
+    if (!importPreview.length) return
+    setImporting(true)
+    let inserted = 0, errors = 0
+    for (const m of importPreview) {
+      const { error } = await supabase.from('member').insert({
+        tenant_id: tenantId, ...m,
+        gender: ['M','F'].includes(m.gender?.toUpperCase()) ? m.gender.toUpperCase() : 'M',
+        status: Object.keys(STATUS_LABELS).includes(m.status?.toUpperCase()) ? m.status.toUpperCase() : 'AC',
+        role: Object.keys(ROLE_LABELS).includes(m.role) ? m.role : 'member',
+      })
+      if (error) errors++
+      else inserted++
+    }
+    toast.success(`${inserted} membres importés${errors > 0 ? `, ${errors} erreurs (doublons ?)` : ''}`)
+    setImportPreview([])
+    setImporting(false)
+    load()
+  }
+
   const showForm = adding || editing
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <input type="search" className="input flex-1 min-w-[200px]" placeholder="Rechercher..." value={search} onChange={e => setSearch(e.target.value)} />
         <button onClick={startAdd} className="btn-primary text-sm">+ Ajouter</button>
+        <label className="btn-secondary text-sm cursor-pointer">
+          Importer CSV
+          <input type="file" accept=".csv,.txt,.tsv,.xls,.xlsx" onChange={handleFileImport} className="hidden" />
+        </label>
         <button onClick={exportCSV} className="btn-secondary text-sm">Exporter CSV</button>
         <span className="text-xs text-gray-400">{filtered.length} membres</span>
       </div>
+
+      {importPreview.length > 0 && (
+        <div className="card p-4 mb-4 border-l-4 border-l-blue-500">
+          <h3 className="font-semibold text-sm mb-2">Aperçu de l'import ({importPreview.length} membres)</h3>
+          <div className="max-h-60 overflow-auto text-xs mb-3">
+            <table className="w-full">
+              <thead><tr className="text-left text-gray-500 border-b"><th className="pb-1">Prénom</th><th className="pb-1">Nom</th><th className="pb-1">Tél.</th><th className="pb-1">Statut</th><th className="pb-1">Profession</th></tr></thead>
+              <tbody>
+                {importPreview.slice(0, 20).map((m, i) => (
+                  <tr key={i} className="border-b border-gray-50">
+                    <td className="py-1">{m.first_name}</td><td>{m.last_name}</td><td>{m.phone}</td><td>{m.status}</td><td>{m.profession}</td>
+                  </tr>
+                ))}
+                {importPreview.length > 20 && <tr><td colSpan={5} className="py-1 text-gray-400">... et {importPreview.length - 20} autres</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={confirmImport} disabled={importing} className="btn-primary text-sm">
+              {importing ? 'Import en cours...' : `Confirmer l'import (${importPreview.length} membres)`}
+            </button>
+            <button onClick={() => setImportPreview([])} className="btn-secondary text-sm">Annuler</button>
+          </div>
+        </div>
+      )}
 
       {showForm && (
         <div className="card p-4 mb-4 border-l-4 border-l-brand-500">
@@ -477,7 +602,7 @@ function AdminCotisations({ tenantId, adminId }: { tenantId: string; adminId: st
   const [contribs, setContribs] = useState<any[]>([])
   const [year, setYear] = useState(new Date().getFullYear())
   const [month, setMonth] = useState(new Date().getMonth() + 1)
-  const [amount, setAmount] = useState(1000)
+  const [memberAmounts, setMemberAmounts] = useState<Record<string, number>>({})
   const supabase = createClient()
 
   useEffect(() => {
@@ -486,23 +611,39 @@ function AdminCotisations({ tenantId, adminId }: { tenantId: string; adminId: st
       setMembers(m || [])
       const { data: c } = await supabase.from('contribution').select('*').eq('tenant_id', tenantId).eq('year', year).eq('month', month)
       setContribs(c || [])
+      // Charger les montants existants
+      const amounts: Record<string, number> = {}
+      c?.forEach(co => { amounts[co.member_id] = Number(co.amount) })
+      setMemberAmounts(amounts)
     })()
   }, [year, month])
 
-  function getStatus(memberId: string) {
-    return contribs.find(c => c.member_id === memberId)?.status || 'PENDING'
+  function getContrib(memberId: string) {
+    return contribs.find(c => c.member_id === memberId)
   }
 
-  async function setContribStatus(memberId: string, status: string) {
-    const existing = contribs.find(c => c.member_id === memberId)
+  function getStatus(memberId: string) {
+    return getContrib(memberId)?.status || 'PENDING'
+  }
+
+  function getAmount(memberId: string) {
+    if (memberAmounts[memberId] !== undefined) return memberAmounts[memberId]
+    const existing = getContrib(memberId)
+    return existing ? Number(existing.amount) : 0
+  }
+
+  async function setContribStatus(memberId: string, status: string, customAmount?: number) {
+    const amt = customAmount !== undefined ? customAmount : getAmount(memberId)
+    const existing = getContrib(memberId)
     if (existing) {
       await supabase.from('contribution').update({
-        status, amount: status === 'PAID' ? amount : 0,
+        status, amount: status === 'PAID' ? amt : 0,
         paid_at: status === 'PAID' ? new Date().toISOString() : null, recorded_by: adminId,
       }).eq('id', existing.id)
     } else {
       await supabase.from('contribution').insert({
-        tenant_id: tenantId, member_id: memberId, year, month, amount: status === 'PAID' ? amount : 0,
+        tenant_id: tenantId, member_id: memberId, year, month,
+        amount: status === 'PAID' ? amt : 0,
         status, paid_at: status === 'PAID' ? new Date().toISOString() : null, recorded_by: adminId,
       })
     }
@@ -511,15 +652,8 @@ function AdminCotisations({ tenantId, adminId }: { tenantId: string; adminId: st
     toast.success('Cotisation mise à jour')
   }
 
-  async function markAllPaid() {
-    if (!confirm(`Marquer TOUS les ${members.length} membres comme payés pour ${MONTHS_FR[month-1]} ${year} ?`)) return
-    for (const m of members) {
-      if (getStatus(m.id) !== 'PAID') await setContribStatus(m.id, 'PAID')
-    }
-    toast.success('Tous marqués payés')
-  }
-
   const paid = members.filter(m => getStatus(m.id) === 'PAID').length
+  const totalCollected = contribs.filter(c => c.status === 'PAID').reduce((s, c) => s + Number(c.amount), 0)
 
   return (
     <div>
@@ -530,30 +664,37 @@ function AdminCotisations({ tenantId, adminId }: { tenantId: string; adminId: st
         <select className="input w-auto" value={year} onChange={e => setYear(Number(e.target.value))}>
           {[2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
         </select>
-        <div className="flex items-center gap-1">
-          <span className="text-xs text-gray-500">Montant :</span>
-          <input type="number" className="input w-24" value={amount} onChange={e => setAmount(Number(e.target.value))} />
-          <span className="text-xs text-gray-500">F</span>
-        </div>
-        <button onClick={markAllPaid} className="btn-secondary text-xs">Tout marquer payé</button>
-        <span className="text-xs text-gray-500 ml-auto">{paid}/{members.length} payés</span>
+        <span className="text-xs text-gray-500 ml-auto">{paid}/{members.length} payés · Total : <strong>{formatCFA(totalCollected)}</strong></span>
       </div>
+
+      <p className="text-xs text-gray-400 mb-3">
+        Le montant est libre et individuel pour chaque membre. Saisissez le montant payé puis cliquez "Payé".
+      </p>
 
       <div className="space-y-1">
         {members.map(m => {
           const st = getStatus(m.id)
+          const amt = getAmount(m.id)
           return (
-            <div key={m.id} className="card p-3 flex items-center gap-3">
+            <div key={m.id} className="card p-3 flex items-center gap-2">
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-sm truncate">{m.first_name} {m.last_name}</div>
               </div>
+              <input
+                type="number"
+                className="input w-24 text-right text-sm py-1"
+                placeholder="Montant"
+                value={memberAmounts[m.id] ?? amt || ''}
+                onChange={e => setMemberAmounts({ ...memberAmounts, [m.id]: Number(e.target.value) })}
+              />
+              <span className="text-[10px] text-gray-400 w-4">F</span>
               <div className="flex gap-1">
                 {(['PAID','PENDING','LATE','EXEMPT'] as const).map(s => (
-                  <button key={s} onClick={() => setContribStatus(m.id, s)}
+                  <button key={s} onClick={() => setContribStatus(m.id, s, memberAmounts[m.id])}
                     className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
                       st === s ? (s==='PAID'?'bg-green-500 text-white':s==='LATE'?'bg-red-500 text-white':s==='EXEMPT'?'bg-blue-500 text-white':'bg-amber-500 text-white')
                       : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}>
-                    {s === 'PAID' ? 'Payé' : s === 'LATE' ? 'Retard' : s === 'EXEMPT' ? 'Exonéré' : 'Attente'}
+                    {s === 'PAID' ? 'Payé' : s === 'LATE' ? 'Retard' : s === 'EXEMPT' ? 'Exon.' : 'Att.'}
                   </button>
                 ))}
               </div>
