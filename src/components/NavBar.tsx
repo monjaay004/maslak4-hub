@@ -1,9 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
+import { createClient } from '@/lib/supabase/client'
 import type { Member } from '@/lib/types'
+import { useState } from 'react'
 
 const memberLinks = [
   { href: '/dashboard', label: 'Accueil', icon: '🏠' },
@@ -18,7 +20,17 @@ const adminLinks = [
 
 export function NavBar({ member, isAdmin }: { member: Member; isAdmin: boolean }) {
   const pathname = usePathname()
+  const router = useRouter()
+  const [loggingOut, setLoggingOut] = useState(false)
   const links = isAdmin ? [...memberLinks, ...adminLinks] : memberLinks
+
+  async function handleLogout() {
+    setLoggingOut(true)
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    router.push('/login')
+    router.refresh()
+  }
 
   return (
     <>
@@ -28,19 +40,18 @@ export function NavBar({ member, isAdmin }: { member: Member; isAdmin: boolean }
           {links.map(link => {
             const active = pathname === link.href || pathname.startsWith(link.href + '/')
             return (
-              <Link
-                key={link.href}
-                href={link.href}
-                className={cn(
-                  'flex flex-col items-center gap-0.5 px-3 py-1 rounded-lg text-xs transition-colors',
-                  active ? 'text-brand-500 font-medium' : 'text-gray-400'
-                )}
-              >
+              <Link key={link.href} href={link.href}
+                className={cn('flex flex-col items-center gap-0.5 px-3 py-1 rounded-lg text-xs transition-colors',
+                  active ? 'text-brand-500 font-medium' : 'text-gray-400')}>
                 <span className="text-lg">{link.icon}</span>
                 <span>{link.label}</span>
               </Link>
             )
           })}
+          <button onClick={handleLogout} className="flex flex-col items-center gap-0.5 px-3 py-1 text-xs text-gray-400">
+            <span className="text-lg">🚪</span>
+            <span>Sortir</span>
+          </button>
         </div>
       </nav>
 
@@ -48,9 +59,7 @@ export function NavBar({ member, isAdmin }: { member: Member; isAdmin: boolean }
       <aside className="hidden md:flex md:flex-col md:fixed md:inset-y-0 md:left-0 md:w-64 bg-brand-800 text-white">
         <div className="p-6 border-b border-brand-700">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-brand-500 rounded-full flex items-center justify-center font-bold text-sm">
-              M4
-            </div>
+            <div className="w-10 h-10 bg-brand-500 rounded-full flex items-center justify-center font-bold text-sm">M4</div>
             <div>
               <div className="font-semibold text-sm">Maslak 4</div>
               <div className="text-brand-300 text-xs">Digital HUB</div>
@@ -62,14 +71,9 @@ export function NavBar({ member, isAdmin }: { member: Member; isAdmin: boolean }
           {links.map(link => {
             const active = pathname === link.href || pathname.startsWith(link.href + '/')
             return (
-              <Link
-                key={link.href}
-                href={link.href}
-                className={cn(
-                  'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors',
-                  active ? 'bg-brand-500 text-white' : 'text-brand-200 hover:bg-brand-700'
-                )}
-              >
+              <Link key={link.href} href={link.href}
+                className={cn('flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors',
+                  active ? 'bg-brand-500 text-white' : 'text-brand-200 hover:bg-brand-700')}>
                 <span>{link.icon}</span>
                 <span>{link.label}</span>
               </Link>
@@ -78,17 +82,19 @@ export function NavBar({ member, isAdmin }: { member: Member; isAdmin: boolean }
         </nav>
 
         <div className="p-4 border-t border-brand-700">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 mb-3">
             <div className="w-8 h-8 bg-brand-500 rounded-full flex items-center justify-center text-xs font-medium">
               {member.first_name[0]}{member.last_name[0]}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium truncate">
-                {member.first_name} {member.last_name}
-              </div>
+              <div className="text-sm font-medium truncate">{member.first_name} {member.last_name}</div>
               <div className="text-brand-300 text-xs truncate">{member.role}</div>
             </div>
           </div>
+          <button onClick={handleLogout} disabled={loggingOut}
+            className="w-full text-left px-3 py-2 rounded-lg text-sm text-brand-300 hover:bg-brand-700 hover:text-white transition-colors">
+            {loggingOut ? 'Déconnexion...' : '🚪 Se déconnecter'}
+          </button>
         </div>
       </aside>
     </>

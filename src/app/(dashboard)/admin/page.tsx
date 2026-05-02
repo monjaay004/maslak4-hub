@@ -1,242 +1,767 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
+import { STATUS_LABELS, ROLE_LABELS, MONTHS_FR, type MemberStatus, type MemberRole } from '@/lib/types'
+import { formatCFA, getAncienneteLabel } from '@/lib/utils'
+
+type Tab = 'dashboard' | 'membres' | 'comptes' | 'coran' | 'cotisations' | 'dons' | 'fonds' | 'parametres'
 
 export default function AdminPage() {
-  const [activeCycle, setActiveCycle] = useState<any>(null)
-  const [memberCount, setMemberCount] = useState(0)
-  const [eligibleCount, setEligibleCount] = useState(0)
+  const [tab, setTab] = useState<Tab>('dashboard')
+  const [me, setMe] = useState<any>(null)
   const [loading, setLoading] = useState(true)
-  const [creating, setCreating] = useState(false)
-  const [mode, setMode] = useState('SEQUENTIAL')
   const supabase = createClient()
 
-  async function loadData() {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const { data } = await supabase.from('member').select('*').eq('auth_user_id', user.id).single()
+      if (data && ['admin', 'super_admin'].includes(data.role)) setMe(data)
+      setLoading(false)
+    })()
+  }, [])
 
-    const { data: me } = await supabase
-      .from('member')
-      .select('tenant_id, role')
-      .eq('auth_user_id', user.id)
-      .single()
+  if (loading) return <div className="flex justify-center py-20"><div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" /></div>
+  if (!me) return <div className="text-center py-20 text-gray-400">Accès refusé — réservé aux administrateurs</div>
 
-    if (!me || !['admin', 'super_admin'].includes(me.role)) return
+  const tabs: { key: Tab; label: string; icon: string }[] = [
+    { key: 'dashboard', label: 'Tableau de bord', icon: '📊' },
+    { key: 'membres', label: 'Membres', icon: '👥' },
+    { key: 'comptes', label: 'Comptes', icon: '🔑' },
+    { key: 'coran', label: 'Coran', icon: '📖' },
+    { key: 'cotisations', label: 'Cotisations', icon: '💰' },
+    { key: 'dons', label: 'Dons & Hadya', icon: '🎁' },
+    { key: 'fonds', label: 'Fonds Social', icon: '🤝' },
+    { key: 'parametres', label: 'Paramètres', icon: '⚙️' },
+  ]
 
-    // Cycle actif
-    const { data: cycle } = await supabase
-      .from('v_active_cycle_progress')
-      .select('*')
-      .eq('tenant_id', me.tenant_id)
-      .single()
-    setActiveCycle(cycle)
-
-    // Compteurs
-    const { count: total } = await supabase
-      .from('member')
-      .select('*', { count: 'exact', head: true })
-      .eq('tenant_id', me.tenant_id)
-    setMemberCount(total || 0)
-
-    const { count: eligible } = await supabase
-      .from('member')
-      .select('*', { count: 'exact', head: true })
-      .eq('tenant_id', me.tenant_id)
-      .eq('is_eligible_quran', true)
-      .in('status', ['AC', 'HC'])
-    setEligibleCount(eligible || 0)
-
-    setLoading(false)
-  }
-
-  async function createNewCycle() {
-    setCreating(true)
-
-    const { data: { user } } = await supabase.auth.getUser()
-    const { data: me } = await supabase
-      .from('member')
-      .select('id, tenant_id')
-      .eq('auth_user_id', user!.id)
-      .single()
-
-    if (!me) return
-
-    // Trouver le dernier cycle
-    const { data: lastCycle } = await supabase
-      .from('reading_cycle')
-      .select('cycle_number')
-      .eq('tenant_id', me.tenant_id)
-      .order('cycle_number', { ascending: false })
-      .limit(1)
-      .single()
-
-    const nextNumber = (lastCycle?.cycle_number || 0) + 1
-    const now = new Date()
-
-    // Créer le cycle
-    const { data: newCycle, error } = await supabase
-      .from('reading_cycle')
-      .insert({
-        tenant_id: me.tenant_id,
-        cycle_number: nextNumber,
-        week_label: `Semaine ${getWeekNum(now)} — ${now.getFullYear()}`,
-        distribution_mode: mode,
-        starts_at: now.toISOString(),
-        ends_at: new Date(now.getTime() + 7 * 24 * 3600 * 1000).toISOString(),
-        status: 'ACTIVE',
-        created_by: me.id,
-      })
-      .select()
-      .single()
-
-    if (error) {
-      toast.error('Erreur : ' + error.message)
-      setCreating(false)
-      return
-    }
-
-    // Distribuer les 60 Hizbs
-    const { data: members } = await supabase
-      .from('member')
-      .select('id')
-      .eq('tenant_id', me.tenant_id)
-      .eq('is_eligible_quran', true)
-      .in('status', ['AC', 'HC'])
-      .order('membership_date')
-
-    if (!members || members.length === 0) {
-      toast.error('Aucun membre éligible')
-      setCreating(false)
-      return
-    }
-
-    const hizbs = Array.from({ length: 60 }, (_, i) => i + 1)
-
-    // Mélanger si mode aléatoire
-    if (mode === 'RANDOM_BALANCED') {
-      for (let i = hizbs.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [hizbs[i], hizbs[j]] = [hizbs[j], hizbs[i]]
-      }
-    }
-
-    const assignments = hizbs.map((hizb, i) => ({
-      tenant_id: me.tenant_id,
-      cycle_id: newCycle.id,
-      member_id: members[i % members.length].id,
-      hizb_number: hizb,
-      is_carryover: false,
-      status: 'ASSIGNED',
-    }))
-
-    const { error: assignError } = await supabase
-      .from('hizb_assignment')
-      .insert(assignments)
-
-    if (assignError) {
-      toast.error('Erreur distribution : ' + assignError.message)
-    } else {
-      toast.success(`Cycle ${nextNumber} créé ! ${assignments.length} Hizbs distribués à ${members.length} membres.`)
-    }
-
-    setCreating(false)
-    loadData()
-  }
-
-  useEffect(() => { loadData() }, [])
-
-  if (loading) {
-    return <div className="flex justify-center py-20">
-      <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+  return (
+    <div>
+      <h1 className="text-xl font-semibold mb-4">Administration</h1>
+      {/* Tabs */}
+      <div className="flex gap-1 overflow-x-auto pb-3 mb-4 scrollbar-hide">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+              tab === t.key ? 'bg-brand-500 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+            <span>{t.icon}</span> {t.label}
+          </button>
+        ))}
+      </div>
+      {/* Tab Content */}
+      {tab === 'dashboard' && <AdminDashboard tenantId={me.tenant_id} />}
+      {tab === 'membres' && <AdminMembres tenantId={me.tenant_id} />}
+      {tab === 'comptes' && <AdminComptes tenantId={me.tenant_id} />}
+      {tab === 'coran' && <AdminCoran tenantId={me.tenant_id} adminId={me.id} />}
+      {tab === 'cotisations' && <AdminCotisations tenantId={me.tenant_id} adminId={me.id} />}
+      {tab === 'dons' && <AdminDons tenantId={me.tenant_id} adminId={me.id} />}
+      {tab === 'fonds' && <AdminFonds tenantId={me.tenant_id} adminId={me.id} />}
+      {tab === 'parametres' && <AdminParametres tenantId={me.tenant_id} />}
     </div>
+  )
+}
+
+// ============================================
+// DASHBOARD ADMIN
+// ============================================
+function AdminDashboard({ tenantId }: { tenantId: string }) {
+  const [stats, setStats] = useState<any>(null)
+  const supabase = createClient()
+
+  useEffect(() => {
+    (async () => {
+      const { count: totalMembers } = await supabase.from('member').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId)
+      const { count: activeMembers } = await supabase.from('member').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId).eq('status', 'AC')
+      const { count: eligible } = await supabase.from('member').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId).eq('is_eligible_quran', true)
+      const { count: pendingAccounts } = await supabase.from('app_user').select('*', { count: 'exact', head: true })
+      const { data: cycle } = await supabase.from('v_active_cycle_progress').select('*').eq('tenant_id', tenantId).single()
+      const year = new Date().getFullYear()
+      const { data: contribs } = await supabase.from('contribution').select('amount, status').eq('tenant_id', tenantId).eq('year', year)
+      const totalPaid = contribs?.filter(c => c.status === 'PAID').reduce((s, c) => s + Number(c.amount), 0) || 0
+      const { data: donations } = await supabase.from('donation').select('amount').eq('tenant_id', tenantId)
+      const totalDonations = donations?.reduce((s, d) => s + Number(d.amount), 0) || 0
+      setStats({ totalMembers, activeMembers, eligible, pendingAccounts, cycle, totalPaid, totalDonations })
+    })()
+  }, [])
+
+  if (!stats) return <div className="text-center py-8 text-gray-400">Chargement...</div>
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <StatCard value={stats.totalMembers || 0} label="Membres total" color="blue" />
+      <StatCard value={stats.activeMembers || 0} label="Actifs cotisants" color="green" />
+      <StatCard value={stats.eligible || 0} label="Éligibles Coran" color="purple" />
+      <StatCard value={stats.cycle?.progress_pct || '—'} label={stats.cycle ? `Cycle ${stats.cycle.cycle_number}` : 'Pas de cycle'} suffix={stats.cycle ? '%' : ''} color="amber" />
+      <StatCard value={formatCFA(stats.totalPaid)} label={`Cotisations ${new Date().getFullYear()}`} color="green" />
+      <StatCard value={formatCFA(stats.totalDonations)} label="Dons totaux" color="amber" />
+      <StatCard value={stats.cycle?.total_validated || 0} label="Hizbs validés" color="green" />
+      <StatCard value={stats.cycle?.total_pending || 0} label="Hizbs en attente" color="red" />
+    </div>
+  )
+}
+
+function StatCard({ value, label, suffix, color }: { value: any; label: string; suffix?: string; color: string }) {
+  const colors: Record<string, string> = {
+    blue: 'bg-blue-50 text-blue-700', green: 'bg-green-50 text-green-700',
+    amber: 'bg-amber-50 text-amber-700', red: 'bg-red-50 text-red-700',
+    purple: 'bg-purple-50 text-purple-700',
+  }
+  return (
+    <div className={`card p-4 ${colors[color] || ''}`}>
+      <div className="text-xl font-bold">{value}{suffix}</div>
+      <div className="text-xs mt-1 opacity-70">{label}</div>
+    </div>
+  )
+}
+
+// ============================================
+// GESTION DES MEMBRES (CRUD complet)
+// ============================================
+function AdminMembres({ tenantId }: { tenantId: string }) {
+  const [members, setMembers] = useState<any[]>([])
+  const [search, setSearch] = useState('')
+  const [editing, setEditing] = useState<any>(null)
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState<any>({})
+  const supabase = createClient()
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('member').select('*').eq('tenant_id', tenantId).order('last_name')
+    setMembers(data || [])
+  }, [tenantId])
+
+  useEffect(() => { load() }, [load])
+
+  const filtered = members.filter(m =>
+    `${m.first_name} ${m.last_name} ${m.phone} ${m.profession}`.toLowerCase().includes(search.toLowerCase())
+  )
+
+  async function saveMember() {
+    if (!form.first_name || !form.last_name) { toast.error('Nom et prénom requis'); return }
+    if (editing) {
+      const { error } = await supabase.from('member').update({
+        first_name: form.first_name, last_name: form.last_name, gender: form.gender,
+        phone: form.phone, whatsapp: form.whatsapp, email: form.email,
+        profession: form.profession, address: form.address, status: form.status,
+        role: form.role, membership_date: form.membership_date,
+      }).eq('id', editing.id)
+      if (error) toast.error(error.message)
+      else { toast.success('Membre modifié'); setEditing(null); load() }
+    } else {
+      const { error } = await supabase.from('member').insert({
+        tenant_id: tenantId, first_name: form.first_name, last_name: form.last_name,
+        gender: form.gender || 'M', phone: form.phone, whatsapp: form.whatsapp,
+        email: form.email, profession: form.profession, address: form.address,
+        status: form.status || 'AC', role: form.role || 'member',
+        membership_date: form.membership_date || new Date().toISOString().split('T')[0],
+      })
+      if (error) toast.error(error.message)
+      else { toast.success('Membre ajouté'); setAdding(false); setForm({}); load() }
+    }
+  }
+
+  async function deleteMember(id: string, name: string) {
+    if (!confirm(`Supprimer ${name} ? Cette action est irréversible.`)) return
+    const { error } = await supabase.from('member').delete().eq('id', id)
+    if (error) toast.error(error.message)
+    else { toast.success('Membre supprimé'); load() }
+  }
+
+  function startEdit(m: any) {
+    setEditing(m); setAdding(false)
+    setForm({ ...m })
+  }
+
+  function startAdd() {
+    setAdding(true); setEditing(null)
+    setForm({ gender: 'M', status: 'AC', role: 'member', membership_date: new Date().toISOString().split('T')[0] })
+  }
+
+  async function exportCSV() {
+    const rows = [['Prénom','Nom','Statut','Téléphone','WhatsApp','Email','Profession','Adresse','Rôle','Adhésion'].join(';')]
+    members.forEach(m => rows.push([m.first_name,m.last_name,m.status,m.phone||'',m.whatsapp||'',m.email||'',m.profession||'',m.address||'',m.role,m.membership_date].join(';')))
+    const blob = new Blob(['\ufeff'+rows.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `membres_maslak4_${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    toast.success('Export CSV téléchargé')
+  }
+
+  const showForm = adding || editing
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <input type="search" className="input flex-1 min-w-[200px]" placeholder="Rechercher..." value={search} onChange={e => setSearch(e.target.value)} />
+        <button onClick={startAdd} className="btn-primary text-sm">+ Ajouter</button>
+        <button onClick={exportCSV} className="btn-secondary text-sm">Exporter CSV</button>
+        <span className="text-xs text-gray-400">{filtered.length} membres</span>
+      </div>
+
+      {showForm && (
+        <div className="card p-4 mb-4 border-l-4 border-l-brand-500">
+          <h3 className="font-semibold text-sm mb-3">{editing ? 'Modifier le membre' : 'Ajouter un membre'}</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div><label className="text-xs text-gray-500">Prénom *</label><input className="input" value={form.first_name||''} onChange={e => setForm({...form,first_name:e.target.value})} /></div>
+            <div><label className="text-xs text-gray-500">Nom *</label><input className="input" value={form.last_name||''} onChange={e => setForm({...form,last_name:e.target.value})} /></div>
+            <div><label className="text-xs text-gray-500">Genre</label><select className="input" value={form.gender||'M'} onChange={e => setForm({...form,gender:e.target.value})}><option value="M">Homme</option><option value="F">Femme</option></select></div>
+            <div><label className="text-xs text-gray-500">Téléphone</label><input className="input" value={form.phone||''} onChange={e => setForm({...form,phone:e.target.value})} /></div>
+            <div><label className="text-xs text-gray-500">WhatsApp</label><input className="input" value={form.whatsapp||''} onChange={e => setForm({...form,whatsapp:e.target.value})} /></div>
+            <div><label className="text-xs text-gray-500">Email</label><input className="input" type="email" value={form.email||''} onChange={e => setForm({...form,email:e.target.value})} /></div>
+            <div><label className="text-xs text-gray-500">Profession</label><input className="input" value={form.profession||''} onChange={e => setForm({...form,profession:e.target.value})} /></div>
+            <div><label className="text-xs text-gray-500">Adresse</label><input className="input" value={form.address||''} onChange={e => setForm({...form,address:e.target.value})} /></div>
+            <div><label className="text-xs text-gray-500">Date adhésion</label><input className="input" type="date" value={form.membership_date||''} onChange={e => setForm({...form,membership_date:e.target.value})} /></div>
+            <div><label className="text-xs text-gray-500">Statut</label><select className="input" value={form.status||'AC'} onChange={e => setForm({...form,status:e.target.value})}>
+              {Object.entries(STATUS_LABELS).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+            </select></div>
+            <div><label className="text-xs text-gray-500">Rôle</label><select className="input" value={form.role||'member'} onChange={e => setForm({...form,role:e.target.value})}>
+              {Object.entries(ROLE_LABELS).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+            </select></div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button onClick={saveMember} className="btn-primary text-sm">{editing ? 'Enregistrer' : 'Ajouter'}</button>
+            <button onClick={() => { setEditing(null); setAdding(false) }} className="btn-secondary text-sm">Annuler</button>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-1">
+        {filtered.map(m => (
+          <div key={m.id} className="card p-3 flex items-center gap-3">
+            <div className="w-9 h-9 bg-brand-100 rounded-full flex items-center justify-center text-brand-700 font-semibold text-xs flex-shrink-0">
+              {m.first_name[0]}{m.last_name[0]}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-medium text-sm truncate">{m.first_name} {m.last_name}</div>
+              <div className="text-xs text-gray-500 truncate">{m.profession || '—'} · {m.phone || '—'} · {getAncienneteLabel(m.anciennete_mois)}</div>
+            </div>
+            <span className={`badge text-[10px] ${m.status==='AC'?'badge-green':m.status==='HC'?'badge-blue':m.status==='I'?'badge-gray':'badge-amber'}`}>{m.status}</span>
+            <span className="badge badge-blue text-[10px]">{m.role}</span>
+            <button onClick={() => startEdit(m)} className="text-xs text-brand-500 hover:underline">Modifier</button>
+            <button onClick={() => deleteMember(m.id, `${m.first_name} ${m.last_name}`)} className="text-xs text-red-500 hover:underline">Suppr.</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ============================================
+// VALIDATION DES COMPTES (Associer auth → membre)
+// ============================================
+function AdminComptes({ tenantId }: { tenantId: string }) {
+  const [pendingUsers, setPendingUsers] = useState<any[]>([])
+  const [members, setMembers] = useState<any[]>([])
+  const [linkedMembers, setLinkedMembers] = useState<any[]>([])
+  const supabase = createClient()
+
+  useEffect(() => {
+    (async () => {
+      // Membres sans auth_user_id = non liés
+      const { data: unlinked } = await supabase.from('member').select('*').eq('tenant_id', tenantId).is('auth_user_id', null).order('last_name')
+      setMembers(unlinked || [])
+      // Membres liés
+      const { data: linked } = await supabase.from('member').select('*').eq('tenant_id', tenantId).not('auth_user_id', 'is', null).order('last_name')
+      setLinkedMembers(linked || [])
+    })()
+  }, [])
+
+  async function linkAccount(memberId: string, email: string) {
+    const inputEmail = prompt(`Email du compte à associer au membre :`, email || '')
+    if (!inputEmail) return
+    // Chercher l'utilisateur auth par email via une requête SQL
+    const { data, error } = await supabase.rpc('get_auth_user_by_email', { p_email: inputEmail }).single()
+    if (error || !data) {
+      toast.error(`Aucun compte trouvé avec l'email ${inputEmail}. Le membre doit d'abord créer un compte sur l'app.`)
+      return
+    }
+    const { error: updateErr } = await supabase.from('member').update({ auth_user_id: data.id, email: inputEmail }).eq('id', memberId)
+    if (updateErr) toast.error(updateErr.message)
+    else { toast.success('Compte associé !'); window.location.reload() }
+  }
+
+  async function unlinkAccount(memberId: string) {
+    if (!confirm('Dissocier ce compte ? Le membre ne pourra plus se connecter.')) return
+    const { error } = await supabase.from('member').update({ auth_user_id: null }).eq('id', memberId)
+    if (error) toast.error(error.message)
+    else { toast.success('Compte dissocié'); window.location.reload() }
   }
 
   return (
     <div>
-      <h1 className="text-xl font-semibold mb-6">Administration</h1>
+      <p className="text-sm text-gray-500 mb-4">
+        Associez les comptes (créés via la page de connexion) aux profils membres. Un membre sans compte associé ne peut pas se connecter à l'app.
+      </p>
 
-      {/* Stats rapides */}
-      <div className="grid grid-cols-3 gap-3 mb-6">
-        <div className="card p-4 text-center">
-          <div className="text-2xl font-bold">{memberCount}</div>
-          <div className="text-xs text-gray-500">Membres</div>
-        </div>
-        <div className="card p-4 text-center">
-          <div className="text-2xl font-bold text-brand-500">{eligibleCount}</div>
-          <div className="text-xs text-gray-500">Éligibles Coran</div>
-        </div>
-        <div className="card p-4 text-center">
-          <div className="text-2xl font-bold">{activeCycle?.cycle_number || '—'}</div>
-          <div className="text-xs text-gray-500">Cycle actif</div>
-        </div>
-      </div>
-
-      {/* Cycle actif */}
-      {activeCycle ? (
-        <section className="card p-4 mb-6">
-          <h2 className="font-semibold text-sm text-gray-700 mb-3">
-            Cycle {activeCycle.cycle_number} en cours
-          </h2>
-          <div className="h-3 bg-gray-100 rounded-full overflow-hidden mb-2">
-            <div
-              className="h-full bg-brand-500 rounded-full transition-all"
-              style={{ width: `${activeCycle.progress_pct || 0}%` }}
-            />
-          </div>
-          <div className="flex justify-between text-xs text-gray-500">
-            <span>{activeCycle.total_validated}/{activeCycle.total_hizbs} validés</span>
-            <span>{activeCycle.total_pending} en attente</span>
-            {activeCycle.total_carryovers > 0 && (
-              <span className="text-amber-500">{activeCycle.total_carryovers} reliquats</span>
-            )}
-          </div>
-        </section>
+      <h3 className="font-semibold text-sm mb-2 text-amber-600">Membres sans compte ({members.length})</h3>
+      {members.length === 0 ? (
+        <p className="text-xs text-gray-400 mb-4">Tous les membres ont un compte associé</p>
       ) : (
-        <section className="card p-5 mb-6">
-          <h2 className="font-semibold mb-3">Créer un nouveau cycle</h2>
-          <p className="text-sm text-gray-500 mb-4">
-            Aucun cycle actif. Choisissez un mode de distribution et lancez un cycle.
-          </p>
+        <div className="space-y-1 mb-6">
+          {members.map(m => (
+            <div key={m.id} className="card p-3 flex items-center gap-3 border-l-4 border-l-amber-400">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-sm">{m.first_name} {m.last_name}</div>
+                <div className="text-xs text-gray-500">{m.email || m.phone || 'Pas d\'email'}</div>
+              </div>
+              <button onClick={() => linkAccount(m.id, m.email)} className="btn-primary text-xs py-1.5">Associer un compte</button>
+            </div>
+          ))}
+        </div>
+      )}
 
+      <h3 className="font-semibold text-sm mb-2 text-green-600">Comptes actifs ({linkedMembers.length})</h3>
+      <div className="space-y-1">
+        {linkedMembers.map(m => (
+          <div key={m.id} className="card p-3 flex items-center gap-3 border-l-4 border-l-green-400">
+            <div className="flex-1 min-w-0">
+              <div className="font-medium text-sm">{m.first_name} {m.last_name}</div>
+              <div className="text-xs text-gray-500">{m.email || '—'} · {m.role}</div>
+            </div>
+            <span className="badge badge-green text-[10px]">Connecté</span>
+            <button onClick={() => unlinkAccount(m.id)} className="text-xs text-red-500 hover:underline">Dissocier</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ============================================
+// GESTION CORAN (Cycles + Distribution)
+// ============================================
+function AdminCoran({ tenantId, adminId }: { tenantId: string; adminId: string }) {
+  const [cycles, setCycles] = useState<any[]>([])
+  const [activeCycle, setActiveCycle] = useState<any>(null)
+  const [assignments, setAssignments] = useState<any[]>([])
+  const [mode, setMode] = useState('SEQUENTIAL')
+  const [creating, setCreating] = useState(false)
+  const [eligibleCount, setEligibleCount] = useState(0)
+  const supabase = createClient()
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from('reading_cycle').select('*').eq('tenant_id', tenantId).order('cycle_number', { ascending: false }).limit(10)
+      setCycles(data || [])
+      const active = data?.find(c => c.status === 'ACTIVE')
+      setActiveCycle(active || null)
+      if (active) {
+        const { data: a } = await supabase.from('hizb_assignment').select('*, member(first_name, last_name)').eq('cycle_id', active.id).order('hizb_number')
+        setAssignments(a || [])
+      }
+      const { count } = await supabase.from('member').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId).eq('is_eligible_quran', true).in('status', ['AC', 'HC'])
+      setEligibleCount(count || 0)
+    })()
+  }, [])
+
+  async function createCycle() {
+    setCreating(true)
+    const lastNum = cycles[0]?.cycle_number || 0
+    const now = new Date()
+    const { data: newCycle, error } = await supabase.from('reading_cycle').insert({
+      tenant_id: tenantId, cycle_number: lastNum + 1,
+      week_label: `Semaine ${Math.ceil((now.getTime() - new Date(now.getFullYear(),0,1).getTime()) / 604800000)} — ${now.getFullYear()}`,
+      distribution_mode: mode, starts_at: now.toISOString(),
+      ends_at: new Date(now.getTime() + 7 * 86400000).toISOString(),
+      status: 'ACTIVE', created_by: adminId,
+    }).select().single()
+    if (error) { toast.error(error.message); setCreating(false); return }
+
+    // Distribute 60 hizbs
+    const { data: members } = await supabase.from('member').select('id').eq('tenant_id', tenantId).eq('is_eligible_quran', true).in('status', ['AC', 'HC']).order('membership_date')
+    if (!members?.length) { toast.error('Aucun membre éligible'); setCreating(false); return }
+    const hizbs = Array.from({ length: 60 }, (_, i) => i + 1)
+    if (mode === 'RANDOM_BALANCED') { for (let i = hizbs.length - 1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [hizbs[i],hizbs[j]]=[hizbs[j],hizbs[i]] } }
+    const assigns = hizbs.map((h, i) => ({
+      tenant_id: tenantId, cycle_id: newCycle.id, member_id: members[i % members.length].id,
+      hizb_number: h, is_carryover: false, status: 'ASSIGNED',
+    }))
+    await supabase.from('hizb_assignment').insert(assigns)
+    toast.success(`Cycle ${lastNum + 1} créé avec ${assigns.length} Hizbs distribués à ${members.length} membres`)
+    setCreating(false)
+    window.location.reload()
+  }
+
+  async function closeCycle() {
+    if (!activeCycle || !confirm('Clôturer ce cycle ? Les Hizbs non validés deviendront des reliquats.')) return
+    await supabase.from('hizb_assignment').update({ status: 'EXPIRED' }).eq('cycle_id', activeCycle.id).eq('status', 'ASSIGNED')
+    await supabase.from('reading_cycle').update({ status: 'CLOSED', closed_at: new Date().toISOString() }).eq('id', activeCycle.id)
+    toast.success('Cycle clôturé')
+    window.location.reload()
+  }
+
+  const validated = assignments.filter(a => a.status === 'VALIDATED').length
+  const pending = assignments.filter(a => a.status === 'ASSIGNED').length
+
+  return (
+    <div>
+      {activeCycle ? (
+        <>
+          <div className="card p-4 mb-4 border-l-4 border-l-brand-500">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-semibold">Cycle {activeCycle.cycle_number} — {activeCycle.week_label}</h3>
+                <p className="text-xs text-gray-500">Mode : {activeCycle.distribution_mode} · {eligibleCount} membres éligibles</p>
+              </div>
+              <button onClick={closeCycle} className="btn-secondary text-xs text-red-500">Clôturer</button>
+            </div>
+            <div className="h-3 bg-gray-100 rounded-full overflow-hidden mb-2">
+              <div className="h-full bg-brand-500 rounded-full transition-all" style={{ width: `${assignments.length ? (validated/assignments.length)*100 : 0}%` }} />
+            </div>
+            <div className="flex gap-4 text-xs text-gray-500">
+              <span className="text-green-600 font-medium">{validated} validés</span>
+              <span className="text-amber-600">{pending} en attente</span>
+              <span>{assignments.filter(a => a.is_carryover).length} reliquats</span>
+            </div>
+          </div>
+          <h3 className="font-semibold text-sm mb-2">Détail des attributions</h3>
+          <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-6 gap-2">
+            {assignments.map(a => (
+              <div key={a.id} className={`card p-2 text-center text-xs ${
+                a.status === 'VALIDATED' ? 'bg-green-50 border-green-200' :
+                a.is_carryover ? 'bg-amber-50 border-amber-200' : ''}`}>
+                <div className="font-bold text-lg">{a.hizb_number}</div>
+                <div className="truncate text-gray-500">{a.member?.first_name} {a.member?.last_name?.[0]}.</div>
+                <div className={a.status === 'VALIDATED' ? 'text-green-600' : 'text-gray-400'}>{a.status === 'VALIDATED' ? '✓' : a.is_carryover ? '↻' : '—'}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="card p-5">
+          <h3 className="font-semibold mb-3">Lancer un nouveau cycle de lecture</h3>
+          <p className="text-sm text-gray-500 mb-4">{eligibleCount} membres éligibles (6+ mois d'ancienneté, statut AC ou HC)</p>
           <div className="space-y-2 mb-4">
             {[
-              { value: 'SEQUENTIAL', label: 'Rotation séquentielle', desc: 'Hizb 1→60, chaque membre reçoit à tour de rôle' },
-              { value: 'RANDOM_BALANCED', label: 'Aléatoire équilibré', desc: 'Distribution aléatoire, évite les répétitions' },
-              { value: 'MANUAL', label: 'Manuel', desc: 'Vous attribuez chaque Hizb manuellement' },
+              { v: 'SEQUENTIAL', l: 'Rotation séquentielle', d: 'Hizb 1→60, chaque membre à tour de rôle' },
+              { v: 'RANDOM_BALANCED', l: 'Aléatoire équilibré', d: 'Distribution aléatoire, évite les répétitions' },
+              { v: 'MANUAL', l: 'Manuel', d: 'Attribution manuelle de chaque Hizb' },
             ].map(opt => (
-              <label key={opt.value}
-                className={`block p-3 rounded-lg border cursor-pointer transition-all ${
-                  mode === opt.value ? 'border-brand-500 bg-brand-50' : 'border-gray-200'
-                }`}
-              >
-                <input
-                  type="radio" name="mode" value={opt.value}
-                  checked={mode === opt.value}
-                  onChange={() => setMode(opt.value)}
-                  className="sr-only"
-                />
-                <div className="font-medium text-sm">{opt.label}</div>
-                <div className="text-xs text-gray-500">{opt.desc}</div>
+              <label key={opt.v} className={`block p-3 rounded-lg border cursor-pointer transition-all ${mode === opt.v ? 'border-brand-500 bg-brand-50' : 'border-gray-200'}`}>
+                <input type="radio" name="mode" value={opt.v} checked={mode===opt.v} onChange={() => setMode(opt.v)} className="sr-only" />
+                <div className="font-medium text-sm">{opt.l}</div>
+                <div className="text-xs text-gray-500">{opt.d}</div>
               </label>
             ))}
           </div>
-
-          <button
-            onClick={createNewCycle}
-            disabled={creating}
-            className="btn-primary w-full"
-          >
-            {creating ? 'Création en cours...' : `Lancer le cycle (${eligibleCount} membres éligibles)`}
+          <button onClick={createCycle} disabled={creating} className="btn-primary w-full">
+            {creating ? 'Création...' : `Lancer le cycle (${eligibleCount} membres)`}
           </button>
-        </section>
+        </div>
+      )}
+
+      {cycles.length > 0 && (
+        <div className="mt-6">
+          <h3 className="font-semibold text-sm mb-2">Historique des cycles</h3>
+          <div className="space-y-1">
+            {cycles.filter(c => c.status === 'CLOSED').map(c => (
+              <div key={c.id} className="card p-3 flex items-center justify-between text-sm">
+                <span>Cycle {c.cycle_number} — {c.week_label}</span>
+                <span className="badge badge-gray">{c.distribution_mode}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   )
 }
 
-function getWeekNum(d: Date): number {
-  const start = new Date(d.getFullYear(), 0, 1)
-  return Math.ceil(((d.getTime() - start.getTime()) / 86400000 + start.getDay() + 1) / 7)
+// ============================================
+// COTISATIONS (Pointage complet)
+// ============================================
+function AdminCotisations({ tenantId, adminId }: { tenantId: string; adminId: string }) {
+  const [members, setMembers] = useState<any[]>([])
+  const [contribs, setContribs] = useState<any[]>([])
+  const [year, setYear] = useState(new Date().getFullYear())
+  const [month, setMonth] = useState(new Date().getMonth() + 1)
+  const [amount, setAmount] = useState(1000)
+  const supabase = createClient()
+
+  useEffect(() => {
+    (async () => {
+      const { data: m } = await supabase.from('member').select('*').eq('tenant_id', tenantId).in('status', ['AC', 'HC']).order('last_name')
+      setMembers(m || [])
+      const { data: c } = await supabase.from('contribution').select('*').eq('tenant_id', tenantId).eq('year', year).eq('month', month)
+      setContribs(c || [])
+    })()
+  }, [year, month])
+
+  function getStatus(memberId: string) {
+    return contribs.find(c => c.member_id === memberId)?.status || 'PENDING'
+  }
+
+  async function setContribStatus(memberId: string, status: string) {
+    const existing = contribs.find(c => c.member_id === memberId)
+    if (existing) {
+      await supabase.from('contribution').update({
+        status, amount: status === 'PAID' ? amount : 0,
+        paid_at: status === 'PAID' ? new Date().toISOString() : null, recorded_by: adminId,
+      }).eq('id', existing.id)
+    } else {
+      await supabase.from('contribution').insert({
+        tenant_id: tenantId, member_id: memberId, year, month, amount: status === 'PAID' ? amount : 0,
+        status, paid_at: status === 'PAID' ? new Date().toISOString() : null, recorded_by: adminId,
+      })
+    }
+    const { data: c } = await supabase.from('contribution').select('*').eq('tenant_id', tenantId).eq('year', year).eq('month', month)
+    setContribs(c || [])
+    toast.success('Cotisation mise à jour')
+  }
+
+  async function markAllPaid() {
+    if (!confirm(`Marquer TOUS les ${members.length} membres comme payés pour ${MONTHS_FR[month-1]} ${year} ?`)) return
+    for (const m of members) {
+      if (getStatus(m.id) !== 'PAID') await setContribStatus(m.id, 'PAID')
+    }
+    toast.success('Tous marqués payés')
+  }
+
+  const paid = members.filter(m => getStatus(m.id) === 'PAID').length
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <select className="input w-auto" value={month} onChange={e => setMonth(Number(e.target.value))}>
+          {MONTHS_FR.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+        </select>
+        <select className="input w-auto" value={year} onChange={e => setYear(Number(e.target.value))}>
+          {[2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-gray-500">Montant :</span>
+          <input type="number" className="input w-24" value={amount} onChange={e => setAmount(Number(e.target.value))} />
+          <span className="text-xs text-gray-500">F</span>
+        </div>
+        <button onClick={markAllPaid} className="btn-secondary text-xs">Tout marquer payé</button>
+        <span className="text-xs text-gray-500 ml-auto">{paid}/{members.length} payés</span>
+      </div>
+
+      <div className="space-y-1">
+        {members.map(m => {
+          const st = getStatus(m.id)
+          return (
+            <div key={m.id} className="card p-3 flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-sm truncate">{m.first_name} {m.last_name}</div>
+              </div>
+              <div className="flex gap-1">
+                {(['PAID','PENDING','LATE','EXEMPT'] as const).map(s => (
+                  <button key={s} onClick={() => setContribStatus(m.id, s)}
+                    className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
+                      st === s ? (s==='PAID'?'bg-green-500 text-white':s==='LATE'?'bg-red-500 text-white':s==='EXEMPT'?'bg-blue-500 text-white':'bg-amber-500 text-white')
+                      : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}>
+                    {s === 'PAID' ? 'Payé' : s === 'LATE' ? 'Retard' : s === 'EXEMPT' ? 'Exonéré' : 'Attente'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ============================================
+// DONS (Hadya)
+// ============================================
+function AdminDons({ tenantId, adminId }: { tenantId: string; adminId: string }) {
+  const [dons, setDons] = useState<any[]>([])
+  const [members, setMembers] = useState<any[]>([])
+  const [form, setForm] = useState({ member_id: '', amount: '', category: 'HADYA', description: '' })
+  const [adding, setAdding] = useState(false)
+  const supabase = createClient()
+
+  useEffect(() => {
+    (async () => {
+      const { data: d } = await supabase.from('donation').select('*, member(first_name, last_name)').eq('tenant_id', tenantId).order('received_at', { ascending: false }).limit(50)
+      setDons(d || [])
+      const { data: m } = await supabase.from('member').select('id, first_name, last_name').eq('tenant_id', tenantId).order('last_name')
+      setMembers(m || [])
+    })()
+  }, [])
+
+  async function addDon() {
+    if (!form.amount) { toast.error('Montant requis'); return }
+    const { error } = await supabase.from('donation').insert({
+      tenant_id: tenantId, member_id: form.member_id || null,
+      amount: Number(form.amount), category: form.category,
+      description: form.description, recorded_by: adminId,
+    })
+    if (error) toast.error(error.message)
+    else { toast.success('Don enregistré'); setAdding(false); setForm({ member_id: '', amount: '', category: 'HADYA', description: '' }); window.location.reload() }
+  }
+
+  const total = dons.reduce((s, d) => s + Number(d.amount), 0)
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-sm text-gray-500">Total : <strong className="text-lg text-brand-500">{formatCFA(total)}</strong></div>
+        <button onClick={() => setAdding(!adding)} className="btn-primary text-sm">+ Nouveau don</button>
+      </div>
+      {adding && (
+        <div className="card p-4 mb-4 border-l-4 border-l-brand-500">
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs text-gray-500">Membre</label><select className="input" value={form.member_id} onChange={e => setForm({...form,member_id:e.target.value})}>
+              <option value="">Anonyme</option>
+              {members.map(m => <option key={m.id} value={m.id}>{m.first_name} {m.last_name}</option>)}
+            </select></div>
+            <div><label className="text-xs text-gray-500">Montant (FCFA) *</label><input type="number" className="input" value={form.amount} onChange={e => setForm({...form,amount:e.target.value})} /></div>
+            <div><label className="text-xs text-gray-500">Catégorie</label><select className="input" value={form.category} onChange={e => setForm({...form,category:e.target.value})}>
+              <option value="HADYA">Hadya</option><option value="SADAQA">Sadaqa</option><option value="ZAKAT">Zakat</option><option value="OTHER">Autre</option>
+            </select></div>
+            <div><label className="text-xs text-gray-500">Description</label><input className="input" value={form.description} onChange={e => setForm({...form,description:e.target.value})} /></div>
+          </div>
+          <div className="flex gap-2 mt-3">
+            <button onClick={addDon} className="btn-primary text-sm">Enregistrer</button>
+            <button onClick={() => setAdding(false)} className="btn-secondary text-sm">Annuler</button>
+          </div>
+        </div>
+      )}
+      <div className="space-y-1">
+        {dons.map(d => (
+          <div key={d.id} className="card p-3 flex items-center gap-3">
+            <div className="flex-1">
+              <div className="font-medium text-sm">{d.member ? `${d.member.first_name} ${d.member.last_name}` : 'Anonyme'}</div>
+              <div className="text-xs text-gray-500">{d.description || d.category} · {new Date(d.received_at).toLocaleDateString('fr-FR')}</div>
+            </div>
+            <span className="font-bold text-brand-500">{formatCFA(d.amount)}</span>
+            <span className="badge badge-green text-[10px]">{d.category}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ============================================
+// FONDS SOCIAL
+// ============================================
+function AdminFonds({ tenantId, adminId }: { tenantId: string; adminId: string }) {
+  const [transactions, setTransactions] = useState<any[]>([])
+  const [members, setMembers] = useState<any[]>([])
+  const [form, setForm] = useState({ type: 'IN', amount: '', reason: '', beneficiary_id: '' })
+  const [adding, setAdding] = useState(false)
+  const supabase = createClient()
+
+  useEffect(() => {
+    (async () => {
+      const { data: t } = await supabase.from('social_fund').select('*, beneficiary:member!social_fund_beneficiary_id_fkey(first_name, last_name)').eq('tenant_id', tenantId).order('transaction_date', { ascending: false }).limit(50)
+      setTransactions(t || [])
+      const { data: m } = await supabase.from('member').select('id, first_name, last_name').eq('tenant_id', tenantId).order('last_name')
+      setMembers(m || [])
+    })()
+  }, [])
+
+  async function addTransaction() {
+    if (!form.amount || !form.reason) { toast.error('Montant et motif requis'); return }
+    const { error } = await supabase.from('social_fund').insert({
+      tenant_id: tenantId, type: form.type, amount: Number(form.amount),
+      reason: form.reason, beneficiary_id: form.beneficiary_id || null, approved_by: adminId,
+    })
+    if (error) toast.error(error.message)
+    else { toast.success('Transaction enregistrée'); setAdding(false); window.location.reload() }
+  }
+
+  const totalIn = transactions.filter(t => t.type === 'IN').reduce((s, t) => s + Number(t.amount), 0)
+  const totalOut = transactions.filter(t => t.type === 'OUT').reduce((s, t) => s + Number(t.amount), 0)
+
+  return (
+    <div>
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <div className="card p-4 bg-green-50"><div className="text-lg font-bold text-green-700">{formatCFA(totalIn)}</div><div className="text-xs text-green-600">Entrées</div></div>
+        <div className="card p-4 bg-red-50"><div className="text-lg font-bold text-red-700">{formatCFA(totalOut)}</div><div className="text-xs text-red-600">Sorties</div></div>
+        <div className="card p-4 bg-blue-50"><div className="text-lg font-bold text-blue-700">{formatCFA(totalIn - totalOut)}</div><div className="text-xs text-blue-600">Solde</div></div>
+      </div>
+      <button onClick={() => setAdding(!adding)} className="btn-primary text-sm mb-4">+ Nouvelle opération</button>
+      {adding && (
+        <div className="card p-4 mb-4 border-l-4 border-l-brand-500">
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs text-gray-500">Type</label><select className="input" value={form.type} onChange={e => setForm({...form,type:e.target.value})}>
+              <option value="IN">Entrée</option><option value="OUT">Sortie</option>
+            </select></div>
+            <div><label className="text-xs text-gray-500">Montant *</label><input type="number" className="input" value={form.amount} onChange={e => setForm({...form,amount:e.target.value})} /></div>
+            <div className="col-span-2"><label className="text-xs text-gray-500">Motif *</label><input className="input" value={form.reason} onChange={e => setForm({...form,reason:e.target.value})} /></div>
+            {form.type === 'OUT' && (
+              <div><label className="text-xs text-gray-500">Bénéficiaire</label><select className="input" value={form.beneficiary_id} onChange={e => setForm({...form,beneficiary_id:e.target.value})}>
+                <option value="">—</option>{members.map(m => <option key={m.id} value={m.id}>{m.first_name} {m.last_name}</option>)}
+              </select></div>
+            )}
+          </div>
+          <div className="flex gap-2 mt-3">
+            <button onClick={addTransaction} className="btn-primary text-sm">Enregistrer</button>
+            <button onClick={() => setAdding(false)} className="btn-secondary text-sm">Annuler</button>
+          </div>
+        </div>
+      )}
+      <div className="space-y-1">
+        {transactions.map(t => (
+          <div key={t.id} className={`card p-3 flex items-center gap-3 border-l-4 ${t.type === 'IN' ? 'border-l-green-400' : 'border-l-red-400'}`}>
+            <div className="flex-1">
+              <div className="font-medium text-sm">{t.reason}</div>
+              <div className="text-xs text-gray-500">{t.beneficiary ? `→ ${t.beneficiary.first_name} ${t.beneficiary.last_name}` : ''} · {new Date(t.transaction_date).toLocaleDateString('fr-FR')}</div>
+            </div>
+            <span className={`font-bold ${t.type === 'IN' ? 'text-green-600' : 'text-red-600'}`}>{t.type === 'IN' ? '+' : '-'}{formatCFA(t.amount)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ============================================
+// PARAMÈTRES
+// ============================================
+function AdminParametres({ tenantId }: { tenantId: string }) {
+  const [tenant, setTenant] = useState<any>(null)
+  const [settings, setSettings] = useState<any>({})
+  const supabase = createClient()
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from('tenant').select('*').eq('id', tenantId).single()
+      setTenant(data)
+      setSettings(data?.settings || {})
+    })()
+  }, [])
+
+  async function saveSettings() {
+    const { error } = await supabase.from('tenant').update({
+      name: tenant.name, city: tenant.city, settings,
+    }).eq('id', tenantId)
+    if (error) toast.error(error.message)
+    else toast.success('Paramètres sauvegardés')
+  }
+
+  if (!tenant) return <div className="text-center py-8 text-gray-400">Chargement...</div>
+  return (
+    <div>
+      <div className="card p-4 mb-4">
+        <h3 className="font-semibold text-sm mb-3">Informations de la communauté</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs text-gray-500">Nom de la communauté</label><input className="input" value={tenant.name||''} onChange={e => setTenant({...tenant,name:e.target.value})} /></div>
+          <div><label className="text-xs text-gray-500">Ville</label><input className="input" value={tenant.city||''} onChange={e => setTenant({...tenant,city:e.target.value})} /></div>
+          <div><label className="text-xs text-gray-500">Slug (identifiant URL)</label><input className="input bg-gray-100" value={tenant.slug||''} disabled /></div>
+          <div><label className="text-xs text-gray-500">Pays</label><input className="input" value={tenant.country||''} onChange={e => setTenant({...tenant,country:e.target.value})} /></div>
+        </div>
+      </div>
+
+      <div className="card p-4 mb-4">
+        <h3 className="font-semibold text-sm mb-3">Configuration métier</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs text-gray-500">Devise</label><input className="input" value={settings.currency||'XOF'} onChange={e => setSettings({...settings,currency:e.target.value})} /></div>
+          <div><label className="text-xs text-gray-500">Montant cotisation (FCFA)</label><input type="number" className="input" value={settings.cotisation_amount||1000} onChange={e => setSettings({...settings,cotisation_amount:Number(e.target.value)})} /></div>
+          <div><label className="text-xs text-gray-500">Mois d'éligibilité Coran</label><input type="number" className="input" value={settings.eligibility_months||6} onChange={e => setSettings({...settings,eligibility_months:Number(e.target.value)})} /></div>
+          <div><label className="text-xs text-gray-500">Fuseau horaire</label><input className="input" value={settings.timezone||'Africa/Dakar'} onChange={e => setSettings({...settings,timezone:e.target.value})} /></div>
+          <div><label className="text-xs text-gray-500">Jour début cycle (0=dim, 5=ven)</label><input type="number" className="input" value={settings.cycle_start_day||5} onChange={e => setSettings({...settings,cycle_start_day:Number(e.target.value)})} /></div>
+          <div><label className="text-xs text-gray-500">Jour fin cycle (4=jeu)</label><input type="number" className="input" value={settings.cycle_end_day||4} onChange={e => setSettings({...settings,cycle_end_day:Number(e.target.value)})} /></div>
+        </div>
+      </div>
+
+      <button onClick={saveSettings} className="btn-primary">Sauvegarder les paramètres</button>
+    </div>
+  )
 }
