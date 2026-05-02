@@ -6,51 +6,47 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 
 export default function LoginPage() {
-  const [phone, setPhone] = useState('')
-  const [otp, setOtp] = useState('')
-  const [step, setStep] = useState<'phone' | 'otp'>('phone')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [isSignUp, setIsSignUp] = useState(false)
   const [loading, setLoading] = useState(false)
   const router = useRouter()
   const supabase = createClient()
 
-  const formatPhoneForAuth = (input: string) => {
-    const clean = input.replace(/\D/g, '')
-    if (clean.startsWith('221')) return `+${clean}`
-    if (clean.startsWith('7') || clean.startsWith('6')) return `+221${clean}`
-    return `+${clean}`
-  }
-
-  async function sendOtp() {
-    setLoading(true)
-    const formatted = formatPhoneForAuth(phone)
-    const { error } = await supabase.auth.signInWithOtp({ phone: formatted })
-    setLoading(false)
-
-    if (error) {
-      toast.error('Erreur lors de l\'envoi du code. Vérifiez le numéro.')
+  async function handleLogin() {
+    if (!email || !password) {
+      toast.error('Veuillez remplir tous les champs')
       return
     }
-    toast.success('Code envoyé par SMS')
-    setStep('otp')
-  }
-
-  async function verifyOtp() {
     setLoading(true)
-    const formatted = formatPhoneForAuth(phone)
-    const { error } = await supabase.auth.verifyOtp({
-      phone: formatted,
-      token: otp,
-      type: 'sms',
-    })
-    setLoading(false)
 
-    if (error) {
-      toast.error('Code incorrect ou expiré')
-      return
+    if (isSignUp) {
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: `${window.location.origin}/dashboard` }
+      })
+      setLoading(false)
+      if (error) {
+        toast.error(error.message)
+      } else {
+        toast.success('Compte créé ! Vérifiez votre email pour confirmer.')
+      }
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      setLoading(false)
+      if (error) {
+        if (error.message.includes('Invalid login')) {
+          toast.error('Email ou mot de passe incorrect')
+        } else {
+          toast.error(error.message)
+        }
+        return
+      }
+      toast.success('Connexion réussie !')
+      router.push('/dashboard')
+      router.refresh()
     }
-    toast.success('Connexion réussie !')
-    router.push('/dashboard')
-    router.refresh()
   }
 
   return (
@@ -67,58 +63,43 @@ export default function LoginPage() {
 
         {/* Card */}
         <div className="card p-6">
-          {step === 'phone' ? (
-            <>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Numéro WhatsApp
-              </label>
-              <input
-                type="tel"
-                className="input mb-4"
-                placeholder="77 123 45 67"
-                value={phone}
-                onChange={e => setPhone(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && sendOtp()}
-              />
-              <button
-                onClick={sendOtp}
-                disabled={loading || phone.replace(/\D/g, '').length < 9}
-                className="btn-primary w-full"
-              >
-                {loading ? 'Envoi en cours...' : 'Recevoir le code'}
-              </button>
-            </>
-          ) : (
-            <>
-              <p className="text-sm text-gray-600 mb-4">
-                Code envoyé au <strong>{phone}</strong>
-              </p>
-              <input
-                type="text"
-                inputMode="numeric"
-                className="input mb-4 text-center text-2xl tracking-[0.5em]"
-                placeholder="000000"
-                maxLength={6}
-                value={otp}
-                onChange={e => setOtp(e.target.value.replace(/\D/g, ''))}
-                onKeyDown={e => e.key === 'Enter' && verifyOtp()}
-                autoFocus
-              />
-              <button
-                onClick={verifyOtp}
-                disabled={loading || otp.length < 6}
-                className="btn-primary w-full mb-3"
-              >
-                {loading ? 'Vérification...' : 'Se connecter'}
-              </button>
-              <button
-                onClick={() => { setStep('phone'); setOtp('') }}
-                className="btn-secondary w-full text-sm"
-              >
-                Changer de numéro
-              </button>
-            </>
-          )}
+          <h2 className="text-center font-semibold text-gray-800 mb-4">
+            {isSignUp ? 'Créer un compte' : 'Se connecter'}
+          </h2>
+
+          <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+          <input
+            type="email"
+            className="input mb-3"
+            placeholder="votre@email.com"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+          />
+
+          <label className="block text-sm font-medium text-gray-700 mb-1">Mot de passe</label>
+          <input
+            type="password"
+            className="input mb-4"
+            placeholder="Minimum 6 caractères"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleLogin()}
+          />
+
+          <button
+            onClick={handleLogin}
+            disabled={loading}
+            className="btn-primary w-full mb-3"
+          >
+            {loading ? 'Chargement...' : isSignUp ? 'Créer le compte' : 'Se connecter'}
+          </button>
+
+          <button
+            onClick={() => setIsSignUp(!isSignUp)}
+            className="text-sm text-brand-500 w-full text-center hover:underline"
+          >
+            {isSignUp ? 'Déjà un compte ? Se connecter' : 'Pas de compte ? Créer un compte'}
+          </button>
         </div>
 
         <p className="text-center text-brand-200 text-xs mt-6">
