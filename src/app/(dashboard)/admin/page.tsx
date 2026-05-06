@@ -326,7 +326,15 @@ function AdminCoran({ tenantId, adminId }: { tenantId: string; adminId: string }
           <div className="h-3 bg-gray-100 rounded-full overflow-hidden mb-2"><div className="h-full bg-brand-500 rounded-full" style={{ width: `${assignments.length ? (validated/assignments.length)*100 : 0}%` }} /></div>
           <div className="flex gap-4 text-xs"><span className="text-green-600 font-medium">{validated} validés</span><span className="text-amber-600">{assignments.length - validated} en attente</span></div>
         </div>
-        <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-10 gap-1">{assignments.map(a => <div key={a.id} className={`p-1.5 text-center text-xs rounded ${a.status === 'VALIDATED' ? 'bg-green-100 text-green-700' : 'bg-gray-50 text-gray-500'}`}><div className="font-bold">{a.hizb_number}</div><div className="truncate text-[9px]">{a.member?.first_name?.[0]}.{a.member?.last_name?.[0]}</div></div>)}</div>
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">{assignments.map(a => {
+          const ref = hizbs.find((h: any) => h.number === a.hizb_number)
+          return <div key={a.id} className={`p-2 text-center text-xs rounded ${a.status === 'VALIDATED' ? 'bg-green-100 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
+            <div className="font-bold text-lg">{a.hizb_number}</div>
+            {ref && <div className="text-[9px] truncate mb-0.5" dir="rtl">{ref.arabic}</div>}
+            <div className="truncate text-[9px]">{a.member?.first_name} {a.member?.last_name?.[0]}.</div>
+            <div className={a.status === 'VALIDATED' ? 'text-green-600' : 'text-gray-300'}>{a.status === 'VALIDATED' ? '✓' : '—'}</div>
+          </div>
+        })}</div>
       </>) : (
         <div className="card p-5">
           <h3 className="font-semibold mb-3">Nouveau cycle</h3><p className="text-sm text-gray-500 mb-4">{eligibleCount} éligibles</p>
@@ -578,6 +586,7 @@ function AdminHadiths({ tenantId, adminId }: { tenantId: string; adminId: string
           <button onClick={() => setSelected(null)} className="text-xs text-brand-500 mb-3 hover:underline">← Retour à la liste</button>
           <div className="text-center mb-4">
             <span className="inline-block w-12 h-12 bg-brand-100 text-brand-700 rounded-full leading-[48px] text-xl font-bold">{selected.number}</span>
+            <h3 className="font-semibold mt-2">{selected.title}</h3>
           </div>
           <div className="text-right text-lg leading-loose mb-4 p-4 bg-amber-50 rounded-lg font-serif" dir="rtl" lang="ar">{selected.arabic}</div>
           <div className="text-sm text-gray-700 leading-relaxed mb-3">{selected.french}</div>
@@ -591,7 +600,8 @@ function AdminHadiths({ tenantId, adminId }: { tenantId: string; adminId: string
               <button key={h.number} onClick={() => setSelected(h)}
                 className={`card p-3 text-center hover:shadow-md transition-shadow ${approved > 0 ? 'border-green-300 bg-green-50' : ''}`}>
                 <div className="text-2xl font-bold text-brand-500 mb-1">{h.number}</div>
-                <div className="text-[10px] text-gray-500 truncate" dir="rtl">{h.arabic?.substring(0, 30)}...</div>
+                <div className="text-[10px] text-gray-700 font-medium truncate mb-0.5">{h.title}</div>
+                <div className="text-[9px] text-gray-400 truncate" dir="rtl">{h.arabic?.substring(0, 25)}...</div>
                 {approved > 0 && <div className="text-[10px] text-green-600 mt-1">{approved} validé(s)</div>}
               </button>
             )
