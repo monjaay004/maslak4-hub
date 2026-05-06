@@ -287,6 +287,7 @@ function AdminCoran({ tenantId, adminId }: { tenantId: string; adminId: string }
   const [mode, setMode] = useState('SEQUENTIAL')
   const [creating, setCreating] = useState(false)
   const [eligibleCount, setEligibleCount] = useState(0)
+  const [hizbs, setHizbs] = useState<any[]>([])
   const supabase = createClient()
   useEffect(() => {
     (async () => {
@@ -295,6 +296,7 @@ function AdminCoran({ tenantId, adminId }: { tenantId: string; adminId: string }
       if (active) { const { data: a } = await supabase.from('hizb_assignment').select('*, member(first_name, last_name)').eq('cycle_id', active.id).order('hizb_number'); setAssignments(a || []) }
       const { count } = await supabase.from('member').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId).eq('is_eligible_quran', true).in('status', ['AC', 'HC'])
       setEligibleCount(count || 0)
+      try { const res = await fetch('/hizbs.json'); setHizbs(await res.json()) } catch {}
     })()
   }, [])
   async function createCycle() {
