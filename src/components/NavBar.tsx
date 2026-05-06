@@ -10,6 +10,7 @@ import { useState } from 'react'
 const memberLinks = [
   { href: '/dashboard', label: 'Accueil', icon: '🏠' },
   { href: '/coran', label: 'Coran', icon: '📖' },
+  { href: '/hadiths', label: 'Hadiths', icon: '📜' },
   { href: '/finance', label: 'Finance', icon: '💰' },
   { href: '/membres', label: 'Membres', icon: '👥' },
 ]
