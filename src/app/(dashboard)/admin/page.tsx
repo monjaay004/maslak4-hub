@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, type ChangeEvent } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import { STATUS_LABELS, ROLE_LABELS, MONTHS_FR, type MemberStatus, type MemberRole } from '@/lib/types'
@@ -193,7 +193,7 @@ function AdminMembres({ tenantId }: { tenantId: string }) {
     toast.success('Export CSV téléchargé')
   }
 
-  async function handleFileImport(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileImport(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     setImporting(true)
