@@ -684,7 +684,7 @@ function AdminCotisations({ tenantId, adminId }: { tenantId: string; adminId: st
                 type="number"
                 className="input w-24 text-right text-sm py-1"
                 placeholder="Montant"
-                value={memberAmounts[m.id] ?? amt || ''}
+                value={(memberAmounts[m.id] ?? amt) || ''}
                 onChange={e => setMemberAmounts({ ...memberAmounts, [m.id]: Number(e.target.value) })}
               />
               <span className="text-[10px] text-gray-400 w-4">F</span>
