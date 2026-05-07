@@ -27,17 +27,18 @@ export default async function DashboardLayout({ children }: { children: React.Re
       .single()
 
     if (tenant) {
+      const meta = user.user_metadata || {}
       const emailName = user.email?.split('@')[0] || 'Nouveau'
       const { data: newMember } = await adminDb
         .from('member')
         .insert({
           tenant_id: tenant.id,
           auth_user_id: user.id,
-          first_name: emailName.charAt(0).toUpperCase() + emailName.slice(1),
-          last_name: 'Membre',
+          first_name: meta.first_name || emailName.charAt(0).toUpperCase() + emailName.slice(1),
+          last_name: meta.last_name || 'Membre',
           email: user.email,
-          phone: user.phone || null,
-          whatsapp: user.phone || null,
+          phone: meta.whatsapp || user.phone || null,
+          whatsapp: meta.whatsapp || user.phone || null,
           membership_date: new Date().toISOString().split('T')[0],
           status: 'AC',
           role: 'member',

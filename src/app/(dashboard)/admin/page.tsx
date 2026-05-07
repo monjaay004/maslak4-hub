@@ -285,15 +285,30 @@ function AdminMembres({ tenantId }: { tenantId: string }) {
           <div className="flex gap-2 mt-4"><button onClick={saveMember} className="btn-primary text-sm">{editing ? 'Enregistrer' : 'Ajouter'}</button><button onClick={() => { setEditing(null); setAdding(false) }} className="btn-secondary text-sm">Annuler</button></div>
         </div>
       )}
-      <div className="space-y-1">{filtered.map(m => (
+      <div className="space-y-1">{filtered.filter(m => m.status !== 'I').map(m => (
         <div key={m.id} className="card p-3 flex items-center gap-2">
           <div className="w-8 h-8 bg-brand-100 rounded-full flex items-center justify-center text-brand-700 font-semibold text-xs flex-shrink-0">{m.first_name[0]}{m.last_name[0]}</div>
           <div className="flex-1 min-w-0"><div className="font-medium text-sm truncate">{m.first_name} {m.last_name}</div><div className="text-xs text-gray-500 truncate">{m.profession || '—'} · {m.phone || '—'}</div></div>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${m.status==='AC'?'bg-green-100 text-green-700':m.status==='I'?'bg-gray-100 text-gray-500':'bg-amber-100 text-amber-700'}`}>{m.status}</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${m.status==='AC'?'bg-green-100 text-green-700':m.status==='HC'?'bg-blue-100 text-blue-700':'bg-amber-100 text-amber-700'}`}>{STATUS_LABELS[m.status as MemberStatus] || m.status}</span>
           <button onClick={() => startEdit(m)} className="text-xs text-brand-500 hover:underline">Éditer</button>
           <button onClick={() => archiveMember(m.id, `${m.first_name} ${m.last_name}`)} className="text-xs text-red-500 hover:underline">Archiver</button>
         </div>
       ))}</div>
+
+      {/* MEMBRES ARCHIVÉS */}
+      {filtered.filter(m => m.status === 'I').length > 0 && (
+        <div className="mt-8">
+          <h3 className="font-semibold text-sm text-gray-400 mb-2">📦 Membres archivés ({filtered.filter(m => m.status === 'I').length})</h3>
+          <div className="space-y-1">{filtered.filter(m => m.status === 'I').map(m => (
+            <div key={m.id} className="card p-3 flex items-center gap-2 bg-gray-50 opacity-70">
+              <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center text-gray-500 font-semibold text-xs flex-shrink-0">{m.first_name[0]}{m.last_name[0]}</div>
+              <div className="flex-1 min-w-0"><div className="font-medium text-sm truncate text-gray-500">{m.first_name} {m.last_name}</div><div className="text-xs text-gray-400 truncate">{m.profession || '—'} · {m.phone || '—'}</div></div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-gray-200 text-gray-500">Archivé</span>
+              <button onClick={() => startEdit(m)} className="text-xs text-brand-500 hover:underline">Réactiver</button>
+            </div>
+          ))}</div>
+        </div>
+      )}
     </div>
   )
 }
