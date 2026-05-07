@@ -9,6 +9,9 @@ export default function CoranPage() {
   const [assignments, setAssignments] = useState<any[]>([])
   const [cycle, setCycle] = useState<any>(null)
   const [hizbs, setHizbs] = useState<any[]>([])
+  const [viewing, setViewing] = useState<number | null>(null)
+  const [content, setContent] = useState<any[]>([])
+  const [loadingContent, setLoadingContent] = useState(false)
   const supabase = createClient()
 
   useEffect(() => {
@@ -19,15 +22,12 @@ export default function CoranPage() {
       if (!member) return
       setMe(member)
 
-      // Charger les références des 60 Hizbs
       try { const res = await fetch('/hizbs.json'); setHizbs(await res.json()) } catch {}
 
-      // Charger le cycle actif
       const { data: activeCycle } = await supabase.from('reading_cycle').select('*').eq('tenant_id', member.tenant_id).eq('status', 'ACTIVE').single()
       setCycle(activeCycle)
 
       if (activeCycle) {
-        // Charger MES hizbs assignés pour ce cycle
         const { data: myAssignments } = await supabase
           .from('hizb_assignment')
           .select('*')
@@ -38,6 +38,28 @@ export default function CoranPage() {
       }
     })()
   }, [])
+
+  async function loadFullContent(hizbNum: number) {
+    setViewing(hizbNum)
+    setLoadingContent(true)
+    setContent([])
+    try {
+      // Le hizb N correspond aux quarts (N-1)*4+1 à N*4
+      const allAyahs: any[] = []
+      const start = (hizbNum - 1) * 4 + 1
+      for (let q = start; q < start + 4; q++) {
+        const res = await fetch(`https://api.alquran.cloud/v1/hizbQuarter/${q}/quran-uthmani`)
+        const data = await res.json()
+        if (data.status === 'OK' && data.data?.ayahs) {
+          allAyahs.push(...data.data.ayahs)
+        }
+      }
+      setContent(allAyahs)
+    } catch (e: any) {
+      toast.error('Erreur chargement contenu : ' + e.message)
+    }
+    setLoadingContent(false)
+  }
 
   async function validateHizb(assignmentId: string) {
     const { error } = await supabase.from('hizb_assignment').update({
@@ -50,6 +72,49 @@ export default function CoranPage() {
 
   function getHizbRef(num: number) {
     return hizbs.find((h: any) => h.number === num)
+  }
+
+  // Modal de lecture du contenu complet
+  if (viewing !== null) {
+    const ref = getHizbRef(viewing)
+    return (
+      <div>
+        <button onClick={() => { setViewing(null); setContent([]) }} className="text-sm text-brand-500 mb-3 hover:underline">← Retour</button>
+        <div className="card p-4 mb-4 bg-brand-50">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-brand-500 text-white rounded-xl flex items-center justify-center font-bold text-lg">{viewing}</div>
+            <div className="flex-1">
+              {ref && <div className="text-lg font-medium" dir="rtl" lang="ar" style={{ fontFamily: 'Traditional Arabic, serif' }}>{ref.arabic}</div>}
+              {ref && <div className="text-xs text-gray-500">{ref.verses}</div>}
+            </div>
+          </div>
+        </div>
+
+        {loadingContent ? (
+          <div className="text-center py-12">
+            <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            <p className="text-sm text-gray-500">Chargement du contenu coranique...</p>
+          </div>
+        ) : (
+          <div className="card p-5 bg-amber-50">
+            <div dir="rtl" lang="ar" style={{ fontFamily: 'Traditional Arabic, "Noto Naskh Arabic", serif', fontSize: '1.5rem', lineHeight: '2.6' }}>
+              {content.map((ayah, i) => {
+                const prevAyah = i > 0 ? content[i - 1] : null
+                const showSurahName = !prevAyah || prevAyah.surah?.number !== ayah.surah?.number
+                return (
+                  <span key={ayah.number}>
+                    {showSurahName && <div className="text-center my-4 text-brand-700 font-bold text-base bg-white rounded-lg py-2 border-2 border-brand-300">{ayah.surah?.name}</div>}
+                    {ayah.text}
+                    <span className="inline-block mx-1 text-brand-500 text-sm">﴿{ayah.numberInSurah}﴾</span>
+                  </span>
+                )
+              })}
+            </div>
+            {content.length > 0 && <p className="text-xs text-gray-500 text-center mt-4">{content.length} versets · Source : api.alquran.cloud</p>}
+          </div>
+        )}
+      </div>
+    )
   }
 
   const validated = assignments.filter(a => a.status === 'VALIDATED').length
@@ -67,7 +132,6 @@ export default function CoranPage() {
         </div>
       ) : (
         <>
-          {/* En-tête du cycle */}
           <div className="card p-4 mb-4 bg-brand-50 border-brand-200">
             <div className="flex items-center justify-between mb-2">
               <h2 className="font-semibold text-brand-800">Cycle {cycle.cycle_number}</h2>
@@ -82,7 +146,6 @@ export default function CoranPage() {
             </div>
           </div>
 
-          {/* Mes Hizbs */}
           {assignments.length === 0 ? (
             <div className="card p-6 text-center">
               <p className="text-gray-500">Aucun Hizb ne vous est attribué pour ce cycle.</p>
@@ -95,34 +158,27 @@ export default function CoranPage() {
                 const isValidated = a.status === 'VALIDATED'
                 return (
                   <div key={a.id} className={`card p-4 border-l-4 ${isValidated ? 'border-l-green-500 bg-green-50' : a.is_carryover ? 'border-l-amber-400 bg-amber-50' : 'border-l-brand-500'}`}>
-                    <div className="flex items-start gap-4">
-                      <div className={`w-14 h-14 rounded-xl flex items-center justify-center font-bold text-xl flex-shrink-0 ${isValidated ? 'bg-green-500 text-white' : 'bg-brand-500 text-white'}`}>
-                        {a.hizb_number}
-                      </div>
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg flex-shrink-0 ${isValidated ? 'bg-green-500 text-white' : 'bg-brand-500 text-white'}`}>{a.hizb_number}</div>
                       <div className="flex-1 min-w-0">
-                        {ref && (
-                          <>
-                            <div className="text-right text-lg mb-1" dir="rtl" lang="ar" style={{ fontFamily: 'Traditional Arabic, serif' }}>
-                              {ref.arabic}
-                            </div>
-                            <div className="text-xs text-gray-500">{ref.verses}</div>
-                          </>
-                        )}
-                        {a.is_carryover && <span className="text-[10px] text-amber-600 font-medium">↻ Report du cycle précédent</span>}
+                        {ref && <div className="text-base mb-1" dir="rtl" lang="ar" style={{ fontFamily: 'Traditional Arabic, serif' }}>{ref.arabic}</div>}
+                        {ref && <div className="text-xs text-gray-500">{ref.verses}</div>}
+                        {a.is_carryover && <span className="text-[10px] text-amber-600 font-medium">↻ Report</span>}
                       </div>
-                      <div className="flex-shrink-0">
-                        {isValidated ? (
-                          <div className="text-center">
-                            <span className="text-green-500 text-2xl">✓</span>
-                            <div className="text-[10px] text-green-600">Lu</div>
-                          </div>
-                        ) : (
-                          <button onClick={() => validateHizb(a.id)}
-                            className="px-4 py-2 bg-brand-500 text-white rounded-lg text-sm font-medium hover:bg-brand-600 transition-colors">
-                            Valider
-                          </button>
-                        )}
-                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => loadFullContent(a.hizb_number)}
+                        className="flex-1 px-3 py-2 bg-amber-100 text-amber-800 rounded-lg text-sm font-medium hover:bg-amber-200 transition-colors">
+                        📖 Lire le contenu en arabe
+                      </button>
+                      {!isValidated ? (
+                        <button onClick={() => validateHizb(a.id)}
+                          className="px-4 py-2 bg-brand-500 text-white rounded-lg text-sm font-medium hover:bg-brand-600 transition-colors">
+                          ✓ Valider
+                        </button>
+                      ) : (
+                        <span className="px-4 py-2 bg-green-100 text-green-700 rounded-lg text-sm font-medium">✓ Lu</span>
+                      )}
                     </div>
                   </div>
                 )
