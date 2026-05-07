@@ -46,6 +46,28 @@ export default async function DashboardLayout({ children }: { children: React.Re
         .single()
 
       member = newMember
+
+      // NOTIFIER LES ADMINS du nouveau membre
+      if (newMember) {
+        const { data: admins } = await adminDb
+          .from('member')
+          .select('id')
+          .eq('tenant_id', tenant.id)
+          .in('role', ['admin', 'super_admin'])
+
+        if (admins?.length) {
+          await adminDb.from('notification').insert(
+            admins.map(a => ({
+              tenant_id: tenant.id,
+              member_id: a.id,
+              type: 'NEW_MEMBER',
+              title: 'Nouveau membre inscrit',
+              body: `${newMember.first_name} (${user.email}) vient de créer un compte. Pensez à mettre à jour son profil.`,
+              data: { new_member_id: newMember.id, email: user.email },
+            }))
+          )
+        }
+      }
     }
 
     if (!member) {

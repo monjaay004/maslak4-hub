@@ -63,6 +63,7 @@ export default function AdminPage() {
 /* ========== DASHBOARD ========== */
 function AdminDashboard({ tenantId }: { tenantId: string }) {
   const [s, setS] = useState<any>(null)
+  const [notifs, setNotifs] = useState<any[]>([])
   const supabase = createClient()
   useEffect(() => {
     (async () => {
@@ -78,9 +79,32 @@ function AdminDashboard({ tenantId }: { tenantId: string }) {
       const sfIn = sf?.filter(t => t.type === 'IN').reduce((a, t) => a + Number(t.amount), 0) || 0
       const sfOut = sf?.filter(t => t.type === 'OUT').reduce((a, t) => a + Number(t.amount), 0) || 0
       setS({ total, active, eligible, paid, totalDon, sfBalance: sfIn - sfOut })
+
+      // Charger les notifications non lues
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const { data: me } = await supabase.from('member').select('id').eq('auth_user_id', user.id).single()
+        if (me) {
+          const { data: n } = await supabase.from('notification').select('*').eq('member_id', me.id).is('read_at', null).order('created_at', { ascending: false }).limit(10)
+          setNotifs(n || [])
+        }
+      }
     })()
   }, [])
+
+  async function markRead(id: string) {
+    await supabase.from('notification').update({ read_at: new Date().toISOString() }).eq('id', id)
+    setNotifs(notifs.filter(n => n.id !== id))
+  }
+
+  async function markAllRead() {
+    for (const n of notifs) { await supabase.from('notification').update({ read_at: new Date().toISOString() }).eq('id', n.id) }
+    setNotifs([])
+    toast.success('Toutes les notifications marquées comme lues')
+  }
+
   if (!s) return <p className="text-center py-8 text-gray-400">Chargement...</p>
+
   const cards = [
     { v: s.total || 0, l: 'Membres total', c: 'bg-blue-50 text-blue-700' },
     { v: s.active || 0, l: 'Actifs cotisants', c: 'bg-green-50 text-green-700' },
@@ -89,7 +113,34 @@ function AdminDashboard({ tenantId }: { tenantId: string }) {
     { v: formatCFA(s.totalDon), l: 'Dons totaux', c: 'bg-amber-50 text-amber-700' },
     { v: formatCFA(s.sfBalance), l: 'Solde fonds social', c: 'bg-blue-50 text-blue-700' },
   ]
-  return <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">{cards.map((c, i) => <div key={i} className={`card p-4 ${c.c}`}><div className="text-xl font-bold">{c.v}</div><div className="text-xs mt-1 opacity-70">{c.l}</div></div>)}</div>
+  return (
+    <div>
+      {/* Notifications */}
+      {notifs.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold text-sm text-amber-600">🔔 Notifications ({notifs.length})</h3>
+            <button onClick={markAllRead} className="text-xs text-brand-500 hover:underline">Tout marquer lu</button>
+          </div>
+          <div className="space-y-2">
+            {notifs.map(n => (
+              <div key={n.id} className="card p-3 border-l-4 border-l-amber-400 flex items-start gap-3">
+                <div className="flex-1">
+                  <div className="font-medium text-sm">{n.title}</div>
+                  <div className="text-xs text-gray-500">{n.body}</div>
+                  <div className="text-[10px] text-gray-400 mt-1">{new Date(n.created_at).toLocaleString('fr-FR')}</div>
+                </div>
+                <button onClick={() => markRead(n.id)} className="text-xs text-gray-400 hover:text-gray-600 flex-shrink-0">✕</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">{cards.map((c, i) => <div key={i} className={`card p-4 ${c.c}`}><div className="text-xl font-bold">{c.v}</div><div className="text-xs mt-1 opacity-70">{c.l}</div></div>)}</div>
+    </div>
+  )
 }
 
 /* ========== MEMBRES avec filtres + archivage + import CSV ========== */
