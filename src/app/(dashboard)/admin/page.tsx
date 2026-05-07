@@ -345,7 +345,7 @@ function AdminComptes({ tenantId }: { tenantId: string }) {
   )
 }
 
-/* ========== CORAN ========== */
+/* ========== CORAN avec vue détaillée Hizb ↔ Lecteur ========== */
 function AdminCoran({ tenantId, adminId }: { tenantId: string; adminId: string }) {
   const [cycles, setCycles] = useState<any[]>([])
   const [activeCycle, setActiveCycle] = useState<any>(null)
@@ -354,6 +354,7 @@ function AdminCoran({ tenantId, adminId }: { tenantId: string; adminId: string }
   const [creating, setCreating] = useState(false)
   const [eligibleCount, setEligibleCount] = useState(0)
   const [hizbs, setHizbs] = useState<any[]>([])
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list')
   const supabase = createClient()
   useEffect(() => {
     (async () => {
@@ -371,9 +372,9 @@ function AdminCoran({ tenantId, adminId }: { tenantId: string; adminId: string }
     if (error) { toast.error(error.message); setCreating(false); return }
     const { data: mems } = await supabase.from('member').select('id').eq('tenant_id', tenantId).eq('is_eligible_quran', true).in('status', ['AC', 'HC']).order('membership_date')
     if (!mems?.length) { toast.error('Aucun membre éligible'); setCreating(false); return }
-    const hizbs = Array.from({ length: 60 }, (_, i) => i + 1)
-    if (mode === 'RANDOM_BALANCED') { for (let i = hizbs.length - 1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [hizbs[i],hizbs[j]]=[hizbs[j],hizbs[i]] } }
-    const assigns = hizbs.map((h, i) => ({ tenant_id: tenantId, cycle_id: newCycle.id, member_id: mems[i % mems.length].id, hizb_number: h, is_carryover: false, status: 'ASSIGNED' }))
+    const hizbNums = Array.from({ length: 60 }, (_, i) => i + 1)
+    if (mode === 'RANDOM_BALANCED') { for (let i = hizbNums.length - 1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [hizbNums[i],hizbNums[j]]=[hizbNums[j],hizbNums[i]] } }
+    const assigns = hizbNums.map((h, i) => ({ tenant_id: tenantId, cycle_id: newCycle.id, member_id: mems[i % mems.length].id, hizb_number: h, is_carryover: false, status: 'ASSIGNED' }))
     await supabase.from('hizb_assignment').insert(assigns)
     toast.success(`Cycle ${lastNum + 1} créé — ${assigns.length} Hizbs → ${mems.length} membres`); setCreating(false); window.location.reload()
   }
@@ -383,32 +384,72 @@ function AdminCoran({ tenantId, adminId }: { tenantId: string; adminId: string }
     await supabase.from('reading_cycle').update({ status: 'CLOSED', closed_at: new Date().toISOString() }).eq('id', activeCycle.id)
     toast.success('Cycle clôturé'); window.location.reload()
   }
+  function getHizbRef(num: number) { return hizbs.find((h: any) => h.number === num) }
   const validated = assignments.filter(a => a.status === 'VALIDATED').length
+  const pending = assignments.filter(a => a.status === 'ASSIGNED').length
   return (
     <div>
       {activeCycle ? (<>
         <div className="card p-4 mb-4 border-l-4 border-l-brand-500">
-          <div className="flex items-center justify-between mb-3"><div><h3 className="font-semibold">Cycle {activeCycle.cycle_number} — {activeCycle.week_label}</h3><p className="text-xs text-gray-500">{activeCycle.distribution_mode} · {eligibleCount} éligibles</p></div><button onClick={closeCycle} className="btn-secondary text-xs text-red-500">Clôturer</button></div>
-          <div className="h-3 bg-gray-100 rounded-full overflow-hidden mb-2"><div className="h-full bg-brand-500 rounded-full" style={{ width: `${assignments.length ? (validated/assignments.length)*100 : 0}%` }} /></div>
-          <div className="flex gap-4 text-xs"><span className="text-green-600 font-medium">{validated} validés</span><span className="text-amber-600">{assignments.length - validated} en attente</span></div>
-        </div>
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">{assignments.map(a => {
-          const ref = hizbs.find((h: any) => h.number === a.hizb_number)
-          return <div key={a.id} className={`p-2 text-center text-xs rounded ${a.status === 'VALIDATED' ? 'bg-green-100 text-green-700' : 'bg-gray-50 text-gray-500'}`}>
-            <div className="font-bold text-lg">{a.hizb_number}</div>
-            {ref && <div className="text-[9px] truncate mb-0.5" dir="rtl">{ref.arabic}</div>}
-            <div className="truncate text-[9px]">{a.member?.first_name} {a.member?.last_name?.[0]}.</div>
-            <div className={a.status === 'VALIDATED' ? 'text-green-600' : 'text-gray-300'}>{a.status === 'VALIDATED' ? '✓' : '—'}</div>
+          <div className="flex items-center justify-between mb-3">
+            <div><h3 className="font-semibold">Cycle {activeCycle.cycle_number} — {activeCycle.week_label}</h3><p className="text-xs text-gray-500">{activeCycle.distribution_mode} · {eligibleCount} éligibles</p></div>
+            <button onClick={closeCycle} className="btn-secondary text-xs text-red-500">Clôturer</button>
           </div>
-        })}</div>
+          <div className="h-3 bg-gray-100 rounded-full overflow-hidden mb-2"><div className="h-full bg-brand-500 rounded-full" style={{ width: `${assignments.length ? (validated/assignments.length)*100 : 0}%` }} /></div>
+          <div className="flex gap-4 text-xs"><span className="text-green-600 font-medium">✓ {validated} validés</span><span className="text-amber-600">⏳ {pending} en attente</span></div>
+        </div>
+
+        <div className="flex gap-2 mb-4">
+          <button onClick={() => setViewMode('list')} className={`text-xs px-3 py-1.5 rounded ${viewMode==='list' ? 'bg-brand-500 text-white' : 'bg-gray-100'}`}>Liste détaillée</button>
+          <button onClick={() => setViewMode('grid')} className={`text-xs px-3 py-1.5 rounded ${viewMode==='grid' ? 'bg-brand-500 text-white' : 'bg-gray-100'}`}>Grille compacte</button>
+        </div>
+
+        {viewMode === 'list' ? (
+          <div className="space-y-1">
+            {assignments.map(a => {
+              const ref = getHizbRef(a.hizb_number)
+              return (
+                <div key={a.id} className={`card p-3 flex items-center gap-3 ${a.status === 'VALIDATED' ? 'bg-green-50 border-l-4 border-l-green-500' : 'border-l-4 border-l-gray-200'}`}>
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center font-bold text-sm flex-shrink-0 ${a.status === 'VALIDATED' ? 'bg-green-500 text-white' : 'bg-brand-100 text-brand-700'}`}>{a.hizb_number}</div>
+                  <div className="flex-1 min-w-0">
+                    {ref && <div className="text-sm mb-0.5" dir="rtl" lang="ar" style={{ fontFamily: 'Traditional Arabic, serif' }}>{ref.arabic}</div>}
+                    {ref && <div className="text-[10px] text-gray-400">{ref.verses}</div>}
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="font-medium text-sm">{a.member?.first_name} {a.member?.last_name}</div>
+                    <div className={`text-[10px] font-medium ${a.status === 'VALIDATED' ? 'text-green-600' : 'text-amber-500'}`}>
+                      {a.status === 'VALIDATED' ? '✓ Validé' : '⏳ En attente'}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">{assignments.map(a => {
+            const ref = getHizbRef(a.hizb_number)
+            return <div key={a.id} className={`p-2 text-center text-xs rounded border ${a.status === 'VALIDATED' ? 'bg-green-50 border-green-300' : 'bg-white border-gray-200'}`}>
+              <div className="font-bold text-lg text-brand-600">{a.hizb_number}</div>
+              {ref && <div className="text-[9px] truncate mb-0.5" dir="rtl">{ref.arabic}</div>}
+              <div className="truncate text-[10px] font-medium text-gray-700">{a.member?.first_name} {a.member?.last_name?.[0]}.</div>
+              <div className={`text-[10px] ${a.status === 'VALIDATED' ? 'text-green-600' : 'text-gray-400'}`}>{a.status === 'VALIDATED' ? '✓' : '—'}</div>
+            </div>
+          })}</div>
+        )}
       </>) : (
         <div className="card p-5">
-          <h3 className="font-semibold mb-3">Nouveau cycle</h3><p className="text-sm text-gray-500 mb-4">{eligibleCount} éligibles</p>
-          <div className="space-y-2 mb-4">{[{ v: 'SEQUENTIAL', l: 'Séquentiel' }, { v: 'RANDOM_BALANCED', l: 'Aléatoire' }, { v: 'MANUAL', l: 'Manuel' }].map(o => <label key={o.v} className={`block p-3 rounded-lg border cursor-pointer ${mode === o.v ? 'border-brand-500 bg-brand-50' : 'border-gray-200'}`}><input type="radio" name="mode" value={o.v} checked={mode===o.v} onChange={() => setMode(o.v)} className="sr-only" /><span className="font-medium text-sm">{o.l}</span></label>)}</div>
-          <button onClick={createCycle} disabled={creating} className="btn-primary w-full">{creating ? 'Création...' : 'Lancer le cycle'}</button>
+          <h3 className="font-semibold mb-3">Lancer un nouveau cycle de lecture</h3>
+          <p className="text-sm text-gray-500 mb-2">{eligibleCount} membres éligibles · 60 Hizbs à distribuer</p>
+          <p className="text-xs text-gray-400 mb-4">Chaque Hizb sera attribué à un lecteur. Le membre voit ses Hizbs et les valide après lecture.</p>
+          <div className="space-y-2 mb-4">{[
+            { v: 'SEQUENTIAL', l: 'Séquentiel', d: 'Hizb 1→60, chaque membre à tour de rôle' },
+            { v: 'RANDOM_BALANCED', l: 'Aléatoire équilibré', d: 'Distribution aléatoire, répartition égale' },
+            { v: 'MANUAL', l: 'Manuel', d: 'Attribution manuelle de chaque Hizb' }
+          ].map(o => <label key={o.v} className={`block p-3 rounded-lg border cursor-pointer ${mode === o.v ? 'border-brand-500 bg-brand-50' : 'border-gray-200'}`}><input type="radio" name="mode" value={o.v} checked={mode===o.v} onChange={() => setMode(o.v)} className="sr-only" /><div className="font-medium text-sm">{o.l}</div><div className="text-xs text-gray-500">{o.d}</div></label>)}</div>
+          <button onClick={createCycle} disabled={creating} className="btn-primary w-full">{creating ? 'Création...' : `Lancer le cycle (${eligibleCount} membres × 60 Hizbs)`}</button>
         </div>
       )}
-      {cycles.filter(c => c.status === 'CLOSED').length > 0 && <div className="mt-6"><h3 className="font-semibold text-sm mb-2">Historique</h3>{cycles.filter(c => c.status === 'CLOSED').map(c => <div key={c.id} className="card p-3 flex justify-between text-sm mb-1"><span>Cycle {c.cycle_number} — {c.week_label}</span><span className="text-gray-400">{c.distribution_mode}</span></div>)}</div>}
+      {cycles.filter(c => c.status === 'CLOSED').length > 0 && <div className="mt-6"><h3 className="font-semibold text-sm mb-2">Historique des cycles</h3>{cycles.filter(c => c.status === 'CLOSED').map(c => <div key={c.id} className="card p-3 flex justify-between text-sm mb-1"><span>Cycle {c.cycle_number} — {c.week_label}</span><span className="text-gray-400">{c.distribution_mode}</span></div>)}</div>}
     </div>
   )
 }

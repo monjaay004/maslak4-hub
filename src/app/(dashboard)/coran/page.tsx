@@ -4,115 +4,131 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 
-interface HizbAssignment {
-  id: string
-  hizb_number: number
-  status: string
-  is_carryover: boolean
-  validated_at: string | null
-  cycle: { cycle_number: number; week_label: string; ends_at: string }
-}
-
 export default function CoranPage() {
-  const [assignments, setAssignments] = useState<HizbAssignment[]>([])
+  const [me, setMe] = useState<any>(null)
+  const [assignments, setAssignments] = useState<any[]>([])
+  const [cycle, setCycle] = useState<any>(null)
   const [hizbs, setHizbs] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [validating, setValidating] = useState<string | null>(null)
   const supabase = createClient()
 
-  async function loadMyHizbs() {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-    const { data: member } = await supabase.from('member').select('id').eq('auth_user_id', user.id).single()
-    if (!member) return
-    const { data } = await supabase.from('hizb_assignment').select('*, cycle:reading_cycle!inner(cycle_number, week_label, ends_at)').eq('member_id', member.id).eq('reading_cycle.status', 'ACTIVE').order('hizb_number')
-    setAssignments((data as any) || [])
-    try { const res = await fetch('/hizbs.json'); setHizbs(await res.json()) } catch {}
-    setLoading(false)
-  }
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const { data: member } = await supabase.from('member').select('*').eq('auth_user_id', user.id).single()
+      if (!member) return
+      setMe(member)
 
-  function getHizbRef(num: number) { return hizbs.find(h => h.number === num) }
+      // Charger les références des 60 Hizbs
+      try { const res = await fetch('/hizbs.json'); setHizbs(await res.json()) } catch {}
+
+      // Charger le cycle actif
+      const { data: activeCycle } = await supabase.from('reading_cycle').select('*').eq('tenant_id', member.tenant_id).eq('status', 'ACTIVE').single()
+      setCycle(activeCycle)
+
+      if (activeCycle) {
+        // Charger MES hizbs assignés pour ce cycle
+        const { data: myAssignments } = await supabase
+          .from('hizb_assignment')
+          .select('*')
+          .eq('cycle_id', activeCycle.id)
+          .eq('member_id', member.id)
+          .order('hizb_number')
+        setAssignments(myAssignments || [])
+      }
+    })()
+  }, [])
 
   async function validateHizb(assignmentId: string) {
-    setValidating(assignmentId)
-    const { error } = await supabase.from('hizb_assignment').update({ status: 'VALIDATED', validated_at: new Date().toISOString(), validated_via: 'WEB' }).eq('id', assignmentId)
-    if (error) toast.error('Erreur'); else { toast.success('Hizb validé ! Jazakallahu Khayran'); loadMyHizbs() }
-    setValidating(null)
+    const { error } = await supabase.from('hizb_assignment').update({
+      status: 'VALIDATED', validated_at: new Date().toISOString()
+    }).eq('id', assignmentId)
+    if (error) { toast.error(error.message); return }
+    toast.success('Lecture validée — Jazakallahou khayran')
+    setAssignments(prev => prev.map(a => a.id === assignmentId ? { ...a, status: 'VALIDATED', validated_at: new Date().toISOString() } : a))
   }
 
-  async function validateAll() {
-    const pending = assignments.filter(a => a.status === 'ASSIGNED')
-    for (const a of pending) {
-      await supabase.from('hizb_assignment').update({ status: 'VALIDATED', validated_at: new Date().toISOString(), validated_via: 'WEB' }).eq('id', a.id)
-    }
-    toast.success(`${pending.length} Hizb(s) validé(s) !`); loadMyHizbs()
+  function getHizbRef(num: number) {
+    return hizbs.find((h: any) => h.number === num)
   }
 
-  useEffect(() => { loadMyHizbs() }, [])
-
-  if (loading) return <div className="flex justify-center py-20"><div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" /></div>
-
-  const pending = assignments.filter(a => a.status === 'ASSIGNED')
-  const validated = assignments.filter(a => a.status === 'VALIDATED')
-  const cycle = assignments[0]?.cycle
+  const validated = assignments.filter(a => a.status === 'VALIDATED').length
+  const total = assignments.length
 
   return (
     <div>
-      <h1 className="text-xl font-semibold mb-1">Mes lectures</h1>
-      {cycle && <p className="text-sm text-gray-500 mb-6">Cycle {cycle.cycle_number} · {cycle.week_label}</p>}
+      <h1 className="text-xl font-semibold mb-2">📖 Lecture du Coran</h1>
 
-      {assignments.length === 0 ? (
+      {!cycle ? (
         <div className="card p-8 text-center">
-          <div className="text-4xl mb-3">📖</div>
-          <p className="text-gray-500">Aucun Hizb attribué pour cette semaine</p>
+          <div className="w-16 h-16 bg-gray-100 rounded-full mx-auto mb-4 flex items-center justify-center text-2xl">📖</div>
+          <h2 className="text-lg font-semibold mb-2">Aucun cycle actif</h2>
+          <p className="text-sm text-gray-500">L'administrateur n'a pas encore lancé de cycle de lecture pour cette semaine.</p>
         </div>
       ) : (
         <>
-          <div className="card p-4 mb-4">
+          {/* En-tête du cycle */}
+          <div className="card p-4 mb-4 bg-brand-50 border-brand-200">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium">Ma progression</span>
-              <span className="text-sm font-bold text-brand-500">{validated.length}/{assignments.length}</span>
+              <h2 className="font-semibold text-brand-800">Cycle {cycle.cycle_number}</h2>
+              <span className="text-xs text-brand-600 bg-brand-100 px-2 py-1 rounded">{cycle.week_label}</span>
             </div>
-            <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-              <div className="h-full bg-brand-500 rounded-full transition-all duration-700" style={{ width: `${(validated.length / assignments.length) * 100}%` }} />
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-brand-700">{validated}/{total} Hizbs lus</span>
+              <span className="text-brand-500 font-medium">{total ? Math.round(validated/total*100) : 0}%</span>
+            </div>
+            <div className="h-2 bg-brand-100 rounded-full mt-2 overflow-hidden">
+              <div className="h-full bg-brand-500 rounded-full transition-all" style={{ width: `${total ? (validated/total)*100 : 0}%` }} />
             </div>
           </div>
 
-          {pending.length > 1 && <button onClick={validateAll} className="btn-primary w-full mb-4">Tout valider ({pending.length} Hizbs)</button>}
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {assignments.map(a => {
-              const ref = getHizbRef(a.hizb_number)
-              return (
-                <div key={a.id} className={`card p-4 transition-all ${a.status === 'VALIDATED' ? 'bg-green-50 border-green-200' : a.is_carryover ? 'bg-amber-50 border-amber-200' : 'hover:shadow-md'}`}>
-                  <div className="flex items-start gap-3">
-                    <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xl font-bold flex-shrink-0 ${a.status === 'VALIDATED' ? 'bg-green-100 text-green-600' : 'bg-brand-100 text-brand-700'}`}>
-                      {a.hizb_number}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      {ref && (
-                        <>
-                          <div className="text-right text-base leading-relaxed mb-1" dir="rtl" lang="ar" style={{ fontFamily: 'serif' }}>{ref.arabic}</div>
-                          <div className="text-xs text-gray-500">{ref.verses}</div>
-                        </>
-                      )}
-                      {!ref && <div className="text-sm text-gray-500">Hizb {a.hizb_number}</div>}
-                      {a.is_carryover && <span className="text-[10px] text-amber-600 font-medium">↻ Reliquat</span>}
+          {/* Mes Hizbs */}
+          {assignments.length === 0 ? (
+            <div className="card p-6 text-center">
+              <p className="text-gray-500">Aucun Hizb ne vous est attribué pour ce cycle.</p>
+              <p className="text-xs text-gray-400 mt-1">Contactez l'administrateur si vous pensez que c'est une erreur.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {assignments.map(a => {
+                const ref = getHizbRef(a.hizb_number)
+                const isValidated = a.status === 'VALIDATED'
+                return (
+                  <div key={a.id} className={`card p-4 border-l-4 ${isValidated ? 'border-l-green-500 bg-green-50' : a.is_carryover ? 'border-l-amber-400 bg-amber-50' : 'border-l-brand-500'}`}>
+                    <div className="flex items-start gap-4">
+                      <div className={`w-14 h-14 rounded-xl flex items-center justify-center font-bold text-xl flex-shrink-0 ${isValidated ? 'bg-green-500 text-white' : 'bg-brand-500 text-white'}`}>
+                        {a.hizb_number}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        {ref && (
+                          <>
+                            <div className="text-right text-lg mb-1" dir="rtl" lang="ar" style={{ fontFamily: 'Traditional Arabic, serif' }}>
+                              {ref.arabic}
+                            </div>
+                            <div className="text-xs text-gray-500">{ref.verses}</div>
+                          </>
+                        )}
+                        {a.is_carryover && <span className="text-[10px] text-amber-600 font-medium">↻ Report du cycle précédent</span>}
+                      </div>
+                      <div className="flex-shrink-0">
+                        {isValidated ? (
+                          <div className="text-center">
+                            <span className="text-green-500 text-2xl">✓</span>
+                            <div className="text-[10px] text-green-600">Lu</div>
+                          </div>
+                        ) : (
+                          <button onClick={() => validateHizb(a.id)}
+                            className="px-4 py-2 bg-brand-500 text-white rounded-lg text-sm font-medium hover:bg-brand-600 transition-colors">
+                            Valider
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
-                  <div className="mt-3">
-                    {a.status === 'VALIDATED' ? (
-                      <div className="text-xs text-green-600 font-medium text-center">✅ Validé</div>
-                    ) : (
-                      <button onClick={() => validateHizb(a.id)} disabled={validating === a.id} className="btn-primary text-xs py-1.5 w-full">
-                        {validating === a.id ? '...' : 'J\'ai lu ce Hizb — Valider ✓'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+                )
+              })}
+            </div>
+          )}
         </>
       )}
     </div>
