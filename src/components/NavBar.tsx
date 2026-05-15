@@ -12,7 +12,8 @@ const memberLinks = [
   { href: '/coran', label: 'Coran', icon: '📖' },
   { href: '/hadiths', label: 'Hadiths', icon: '📜' },
   { href: '/finance', label: 'Finance', icon: '💰' },
-  { href: '/membres', label: 'Membres', icon: '👥' },
+  { href: '/membres', label: 'Annuaire', icon: '👥' },
+  { href: '/profil', label: 'Profil', icon: '👤' },
 ]
 
 const adminLinks = [

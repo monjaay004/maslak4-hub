@@ -64,23 +64,37 @@ export default function AdminPage() {
 function AdminDashboard({ tenantId }: { tenantId: string }) {
   const [s, setS] = useState<any>(null)
   const [notifs, setNotifs] = useState<any[]>([])
+  const [toFollowUp, setToFollowUp] = useState<any[]>([])
+  const [recentDonations, setRecentDonations] = useState<any[]>([])
   const supabase = createClient()
   useEffect(() => {
     (async () => {
       const { count: total } = await supabase.from('member').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId)
       const { count: active } = await supabase.from('member').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId).eq('status', 'AC')
       const { count: eligible } = await supabase.from('member').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId).eq('is_eligible_quran', true)
-      const y = new Date().getFullYear()
+      const y = new Date().getFullYear(); const m = new Date().getMonth() + 1
       const { data: co } = await supabase.from('contribution').select('amount,status').eq('tenant_id', tenantId).eq('year', y)
       const paid = co?.filter(c => c.status === 'PAID').reduce((a, c) => a + Number(c.amount), 0) || 0
+      const paidCount = co?.filter(c => c.status === 'PAID').length || 0
       const { data: don } = await supabase.from('donation').select('amount').eq('tenant_id', tenantId)
       const totalDon = don?.reduce((a, d) => a + Number(d.amount), 0) || 0
       const { data: sf } = await supabase.from('social_fund').select('type,amount').eq('tenant_id', tenantId)
       const sfIn = sf?.filter(t => t.type === 'IN').reduce((a, t) => a + Number(t.amount), 0) || 0
       const sfOut = sf?.filter(t => t.type === 'OUT').reduce((a, t) => a + Number(t.amount), 0) || 0
-      setS({ total, active, eligible, paid, totalDon, sfBalance: sfIn - sfOut })
+      setS({ total, active, eligible, paid, paidCount, totalDon, sfBalance: sfIn - sfOut })
 
-      // Charger les notifications non lues
+      // Membres à relancer (n'ont pas payé le mois en cours)
+      const { data: actives } = await supabase.from('member').select('id, first_name, last_name, phone, whatsapp').eq('tenant_id', tenantId).in('status', ['AC', 'HC']).order('last_name')
+      const { data: monthCo } = await supabase.from('contribution').select('member_id, status').eq('tenant_id', tenantId).eq('year', y).eq('month', m)
+      const paidThisMonth = new Set(monthCo?.filter(c => c.status === 'PAID' || c.status === 'EXEMPT').map(c => c.member_id) || [])
+      const followUp = actives?.filter(m => !paidThisMonth.has(m.id)).slice(0, 10) || []
+      setToFollowUp(followUp)
+
+      // Derniers dons reçus
+      const { data: lastDons } = await supabase.from('donation').select('*, member(first_name, last_name)').eq('tenant_id', tenantId).order('received_at', { ascending: false }).limit(5)
+      setRecentDonations(lastDons || [])
+
+      // Notifications non lues
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
         const { data: me } = await supabase.from('member').select('id').eq('auth_user_id', user.id).single()
@@ -96,23 +110,14 @@ function AdminDashboard({ tenantId }: { tenantId: string }) {
     await supabase.from('notification').update({ read_at: new Date().toISOString() }).eq('id', id)
     setNotifs(notifs.filter(n => n.id !== id))
   }
-
   async function markAllRead() {
     for (const n of notifs) { await supabase.from('notification').update({ read_at: new Date().toISOString() }).eq('id', n.id) }
-    setNotifs([])
-    toast.success('Toutes les notifications marquées comme lues')
+    setNotifs([]); toast.success('Notifications marquées lues')
   }
 
   if (!s) return <p className="text-center py-8 text-gray-400">Chargement...</p>
+  const currentMonth = MONTHS_FR[new Date().getMonth()]
 
-  const cards = [
-    { v: s.total || 0, l: 'Membres total', c: 'bg-blue-50 text-blue-700' },
-    { v: s.active || 0, l: 'Actifs cotisants', c: 'bg-green-50 text-green-700' },
-    { v: s.eligible || 0, l: 'Éligibles Coran', c: 'bg-purple-50 text-purple-700' },
-    { v: formatCFA(s.paid), l: `Cotisations ${new Date().getFullYear()}`, c: 'bg-green-50 text-green-700' },
-    { v: formatCFA(s.totalDon), l: 'Dons totaux', c: 'bg-amber-50 text-amber-700' },
-    { v: formatCFA(s.sfBalance), l: 'Solde fonds social', c: 'bg-blue-50 text-blue-700' },
-  ]
   return (
     <div>
       {/* Notifications */}
@@ -122,23 +127,57 @@ function AdminDashboard({ tenantId }: { tenantId: string }) {
             <h3 className="font-semibold text-sm text-amber-600">🔔 Notifications ({notifs.length})</h3>
             <button onClick={markAllRead} className="text-xs text-brand-500 hover:underline">Tout marquer lu</button>
           </div>
-          <div className="space-y-2">
-            {notifs.map(n => (
-              <div key={n.id} className="card p-3 border-l-4 border-l-amber-400 flex items-start gap-3">
-                <div className="flex-1">
-                  <div className="font-medium text-sm">{n.title}</div>
-                  <div className="text-xs text-gray-500">{n.body}</div>
-                  <div className="text-[10px] text-gray-400 mt-1">{new Date(n.created_at).toLocaleString('fr-FR')}</div>
-                </div>
-                <button onClick={() => markRead(n.id)} className="text-xs text-gray-400 hover:text-gray-600 flex-shrink-0">✕</button>
-              </div>
-            ))}
-          </div>
+          <div className="space-y-2">{notifs.map(n => (
+            <div key={n.id} className="card p-3 border-l-4 border-l-amber-400 flex items-start gap-3">
+              <div className="flex-1"><div className="font-medium text-sm">{n.title}</div><div className="text-xs text-gray-500">{n.body}</div><div className="text-[10px] text-gray-400 mt-1">{new Date(n.created_at).toLocaleString('fr-FR')}</div></div>
+              <button onClick={() => markRead(n.id)} className="text-xs text-gray-400 hover:text-gray-600 flex-shrink-0">✕</button>
+            </div>
+          ))}</div>
         </div>
       )}
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">{cards.map((c, i) => <div key={i} className={`card p-4 ${c.c}`}><div className="text-xl font-bold">{c.v}</div><div className="text-xs mt-1 opacity-70">{c.l}</div></div>)}</div>
+      {/* KPIs principaux */}
+      <h3 className="font-semibold text-sm mb-2 text-gray-700">Indicateurs clés</h3>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
+        <div className="card p-4 bg-blue-50 text-blue-700"><div className="text-2xl font-bold">{s.total || 0}</div><div className="text-xs mt-1 opacity-70">Membres total</div></div>
+        <div className="card p-4 bg-green-50 text-green-700"><div className="text-2xl font-bold">{s.active || 0}</div><div className="text-xs mt-1 opacity-70">Actifs cotisants</div></div>
+        <div className="card p-4 bg-purple-50 text-purple-700"><div className="text-2xl font-bold">{s.eligible || 0}</div><div className="text-xs mt-1 opacity-70">Éligibles Coran</div></div>
+        <div className="card p-4 bg-green-50 text-green-700"><div className="text-xl font-bold">{formatCFA(s.paid)}</div><div className="text-xs mt-1 opacity-70">Cotisations {new Date().getFullYear()}</div></div>
+        <div className="card p-4 bg-amber-50 text-amber-700"><div className="text-xl font-bold">{formatCFA(s.totalDon)}</div><div className="text-xs mt-1 opacity-70">Dons totaux</div></div>
+        <div className="card p-4 bg-blue-50 text-blue-700"><div className="text-xl font-bold">{formatCFA(s.sfBalance)}</div><div className="text-xs mt-1 opacity-70">Solde fonds social</div></div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Membres à relancer */}
+        <div>
+          <h3 className="font-semibold text-sm mb-2 text-red-600">⚠️ À relancer pour {currentMonth} ({toFollowUp.length})</h3>
+          {toFollowUp.length === 0 ? (
+            <div className="card p-4 text-center text-sm text-green-600">✓ Tous les membres actifs ont payé ce mois</div>
+          ) : (
+            <div className="space-y-1">{toFollowUp.map(m => (
+              <div key={m.id} className="card p-2 flex items-center gap-2 border-l-4 border-l-red-400">
+                <div className="flex-1 min-w-0"><div className="font-medium text-sm truncate">{m.first_name} {m.last_name}</div><div className="text-xs text-gray-500">{m.phone || m.whatsapp || '—'}</div></div>
+                {m.whatsapp && <a href={`https://wa.me/${m.whatsapp.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Salam ${m.first_name}, petit rappel pour votre cotisation de ${currentMonth}. Barakallahou fik.`)}`} target="_blank" rel="noopener" className="text-xs text-green-600 hover:underline">WhatsApp</a>}
+              </div>
+            ))}</div>
+          )}
+        </div>
+
+        {/* Derniers dons */}
+        <div>
+          <h3 className="font-semibold text-sm mb-2 text-amber-600">🎁 Derniers dons reçus</h3>
+          {recentDonations.length === 0 ? (
+            <div className="card p-4 text-center text-sm text-gray-400">Aucun don récent</div>
+          ) : (
+            <div className="space-y-1">{recentDonations.map(d => (
+              <div key={d.id} className="card p-2 flex items-center gap-2 border-l-4 border-l-amber-400">
+                <div className="flex-1 min-w-0"><div className="font-medium text-sm truncate">{d.member ? `${d.member.first_name} ${d.member.last_name}` : 'Anonyme'}</div><div className="text-xs text-gray-500">{d.category} · {new Date(d.received_at).toLocaleDateString('fr-FR')}</div></div>
+                <span className="font-bold text-amber-600 text-sm">{formatCFA(d.amount)}</span>
+              </div>
+            ))}</div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -485,12 +524,34 @@ function AdminCotisations({ tenantId, adminId }: { tenantId: string; adminId: st
   }
 
   const totalPaid = contribs.filter(c => c.status === 'PAID').reduce((a, c) => a + Number(c.amount), 0)
+
+  function exportYearCSV() {
+    const rows = [['Membre', ...MONTHS_FR, 'Total annuel'].join(';')]
+    members.forEach(m => {
+      const row = [`${m.first_name} ${m.last_name}`]
+      let total = 0
+      for (let mo = 1; mo <= 12; mo++) {
+        const c = contribs.find(x => x.member_id === m.id && x.month === mo)
+        if (c?.status === 'PAID') { row.push(String(c.amount)); total += Number(c.amount) }
+        else if (c?.status === 'LATE') row.push('Retard')
+        else if (c?.status === 'EXEMPT') row.push('Exonéré')
+        else row.push('—')
+      }
+      row.push(String(total))
+      rows.push(row.join(';'))
+    })
+    const blob = new Blob(['\ufeff'+rows.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `cotisations_${year}_${new Date().toISOString().split('T')[0]}.csv`; a.click()
+    toast.success('Export téléchargé')
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <select className="input w-auto" value={year} onChange={e => setYear(Number(e.target.value))}>{[2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}</select>
         <button onClick={() => setView('grid')} className={`text-xs px-3 py-1.5 rounded ${view==='grid' ? 'bg-brand-500 text-white' : 'bg-gray-100'}`}>Grille annuelle</button>
         <button onClick={() => setView('month')} className={`text-xs px-3 py-1.5 rounded ${view==='month' ? 'bg-brand-500 text-white' : 'bg-gray-100'}`}>Par mois</button>
+        <button onClick={exportYearCSV} className="btn-secondary text-xs">Exporter CSV</button>
         <span className="text-xs text-gray-500 ml-auto">Total {year}: <strong>{formatCFA(totalPaid)}</strong></span>
       </div>
       {view === 'grid' ? (
